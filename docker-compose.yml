@@ -1,0 +1,45 @@
+# ── Producción ─────────────────────────────────────────────
+# Uso: docker compose up -d
+#
+# Para desarrollo con hot-reload usa: docker compose -f docker-compose.dev.yml up
+
+services:
+  frontend:
+    build: .
+    container_name: woven-frontend
+    ports:
+      - "3001:80"
+    restart: unless-stopped
+
+  # ── Fase 2: descomentar cuando el backend esté listo ───────
+  # backend:
+  #   build: ../woven-backend
+  #   container_name: woven-backend
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     - DATABASE_URL=postgresql://woven:woven@db:5432/woven
+  #     - REDIS_URL=redis://redis:6379
+  #   depends_on:
+  #     - db
+  #     - redis
+  #   restart: unless-stopped
+  #
+  # db:
+  #   image: postgres:16-alpine
+  #   container_name: woven-db
+  #   environment:
+  #     POSTGRES_USER: woven
+  #     POSTGRES_PASSWORD: woven
+  #     POSTGRES_DB: woven
+  #   volumes:
+  #     - woven_db_data:/var/lib/postgresql/data
+  #   restart: unless-stopped
+  #
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: woven-redis
+  #   restart: unless-stopped
+
+# volumes:
+#   woven_db_data:
