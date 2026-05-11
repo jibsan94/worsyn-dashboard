@@ -41,6 +41,10 @@ const nav = [
       </svg>
     ),
   },
+]
+
+// Items only visible to admin + owner
+const adminNav = [
   {
     label: 'Sistema',
     path: '/system',
@@ -50,10 +54,6 @@ const nav = [
       </svg>
     ),
   },
-]
-
-// Items only visible to admin + owner
-const adminNav = [
   {
     label: 'Usuarios del Sistema',
     path: '/system-users',
@@ -100,8 +100,9 @@ export default function Sidebar() {
   const location = useLocation()
   const inSettings = location.pathname.startsWith('/settings')
   const [settingsOpen, setSettingsOpen] = useState(inSettings)
-  const { hasRole, user } = useAuth()
-  const showAdminNav = hasRole('admin', 'owner')
+  const { user } = useAuth()
+
+  const isAdminOrOwner = user?.role === 'admin' || user?.role === 'owner'
 
   return (
     <aside className="d-sidebar">
@@ -124,15 +125,15 @@ export default function Sidebar() {
             key={item.path}
             to={item.path}
             end={item.path === '/'}
-            className={`nav-link${location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(item.path)) ? ' is-active' : ''}`}
+            className={`nav-link${location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(item.path + '/')) ? ' is-active' : ''}`}
           >
             {item.icon}
             <span>{item.label}</span>
           </NavLink>
         ))}
 
-        {/* Admin-only items */}
-        {showAdminNav && adminNav.map((item) => (
+        {/* Admin + Owner only items */}
+        {isAdminOrOwner && adminNav.map((item) => (
           <NavLink
             key={item.path}
             to={item.path}
@@ -144,7 +145,7 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      <nav className="nav-section">
+      {isAdminOrOwner && <nav className="nav-section">
         <div className="nav-label">Sistema</div>
 
         {/* Configuración — collapsible group */}
@@ -178,7 +179,7 @@ export default function Sidebar() {
             ))}
           </div>
         </div>
-      </nav>
+      </nav>}
 
       {/* Footer */}
       <div className="sidebar-footer">

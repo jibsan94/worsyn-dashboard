@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useToast, ToastContainer } from '../components/Toast'
+import { useAuth } from '../context/AuthContext'
 
 type DbEngine = 'postgresql' | 'mysql' | 'mariadb'
 
@@ -42,6 +43,10 @@ const connectionStrings: Record<DbEngine, (c: DbConfig) => string> = {
 type SaveState = 'idle' | 'saving' | 'saved' | 'error' | 'testing' | 'test-ok' | 'test-fail'
 
 export default function Settings() {
+  const { hasRole } = useAuth()
+  const isOwner   = hasRole('owner')
+  const readOnly  = !isOwner   // admin can view but not edit
+
   const [db, setDb] = useState<DbConfig>({
     engine: 'postgresql', host: 'localhost', port: '5432', database: 'worsyn',
     username: 'worsyn', password: 'worsyn', ssl: false, poolMin: '2', poolMax: '10',
@@ -109,7 +114,15 @@ export default function Settings() {
             {saveState === 'test-ok'   && <span className="tag t-ok">Conexión exitosa</span>}
             {saveState === 'test-fail' && <span className="tag t-error">Conexión fallida</span>}
             {saveState === 'saved'     && <span className="tag t-ok">Guardado</span>}
+            {readOnly && <span className="tag t-warn">Solo lectura</span>}
           </div>
+
+          {readOnly && (
+            <div className="form-notice" style={{ marginBottom: 20 }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              <span>Solo el <strong>owner</strong> puede modificar la configuración de base de datos. Estás en modo lectura.</span>
+            </div>
+          )}
 
           {/* Engine selector */}
           <div className="form-group">
@@ -120,7 +133,8 @@ export default function Settings() {
                   key={e.value}
                   type="button"
                   className={`engine-card${db.engine === e.value ? ' selected' : ''}`}
-                  onClick={() => setEngine(e.value)}
+                  onClick={() => !readOnly && setEngine(e.value)}
+                  disabled={readOnly}
                 >
                   <div className="engine-logo" style={{ background: e.color }}>{e.logo}</div>
                   <span className="engine-label">{e.label}</span>
@@ -154,6 +168,7 @@ export default function Settings() {
                 placeholder="localhost o 192.168.1.100"
                 value={db.host}
                 onChange={e => set('host', e.target.value)}
+                disabled={readOnly}
                 autoComplete="off"
               />
             </div>
@@ -166,6 +181,7 @@ export default function Settings() {
                 placeholder={engine.defaultPort}
                 value={db.port}
                 onChange={e => set('port', e.target.value)}
+                disabled={readOnly}
               />
             </div>
             <div className="form-group">
@@ -177,6 +193,7 @@ export default function Settings() {
                 placeholder={ph.database}
                 value={db.database}
                 onChange={e => set('database', e.target.value)}
+                disabled={readOnly}
                 autoComplete="off"
               />
             </div>
@@ -189,6 +206,7 @@ export default function Settings() {
                 placeholder={ph.username}
                 value={db.username}
                 onChange={e => set('username', e.target.value)}
+                disabled={readOnly}
                 autoComplete="off"
               />
             </div>
@@ -201,6 +219,7 @@ export default function Settings() {
                 placeholder="••••••••••••"
                 value={db.password}
                 onChange={e => set('password', e.target.value)}
+                disabled={readOnly}
                 autoComplete="new-password"
                 style={{ paddingRight: 42 }}
               />
@@ -231,6 +250,7 @@ export default function Settings() {
                 min={1} max={20}
                 value={db.poolMin}
                 onChange={e => set('poolMin', e.target.value)}
+                disabled={readOnly}
               />
               <span className="form-hint">conexiones siempre abiertas</span>
             </div>
@@ -243,6 +263,7 @@ export default function Settings() {
                 min={1} max={100}
                 value={db.poolMax}
                 onChange={e => set('poolMax', e.target.value)}
+                disabled={readOnly}
               />
               <span className="form-hint">conexiones concurrentes máx</span>
             </div>
@@ -254,7 +275,8 @@ export default function Settings() {
                   role="switch"
                   aria-checked={db.ssl}
                   className={`form-toggle${db.ssl ? ' on' : ''}`}
-                  onClick={() => set('ssl', !db.ssl)}
+                  onClick={() => !readOnly && set('ssl', !db.ssl)}
+                  disabled={readOnly}
                 >
                   <span className="form-toggle-thumb" />
                 </button>
@@ -270,7 +292,7 @@ export default function Settings() {
               type="button"
               className="btn btn--ghost"
               onClick={handleTest}
-              disabled={saveState === 'testing' || saveState === 'saving'}
+              disabled={readOnly || saveState === 'testing' || saveState === 'saving'}
             >
               {saveState === 'testing'
                 ? <><span className="spinner" /> Probando...</>
@@ -284,7 +306,7 @@ export default function Settings() {
               type="button"
               className="btn btn--primary"
               onClick={handleSave}
-              disabled={saveState === 'saving' || saveState === 'testing'}
+              disabled={readOnly || saveState === 'saving' || saveState === 'testing'}
             >
               {saveState === 'saving'
                 ? <><span className="spinner light" /> Guardando...</>

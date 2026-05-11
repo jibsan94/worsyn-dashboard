@@ -779,3 +779,92 @@ body {
 .user-menu-item.danger       { color: var(--danger); }
 .user-menu-item.danger svg   { stroke: var(--danger); }
 .user-menu-item.danger:hover { background: var(--danger-soft); }
+
+/* ── Must-change-password alert banner ─────────────────────────── */
+.pwd-alert {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  margin: 1.2rem 1.5rem 0;
+  padding: .75rem 1rem;
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  border-left: 4px solid var(--danger, #ef4444);
+  border-radius: 8px;
+  color: #b91c1c;
+  font-size: .85rem;
+  line-height: 1.4;
+}
+[data-theme="dark"] .pwd-alert {
+  background: #2c1c1c;
+  border-color: #7f1d1d;
+  border-left-color: #ef4444;
+  color: #fca5a5;
+}
+.pwd-alert svg { flex-shrink: 0; stroke: currentColor; }
+
+/* ── SystemUsers — table ───────────────────────────────────────── */
+.su-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.su-table thead th {
+  text-align: left; padding: 8px 12px;
+  color: var(--t-muted); font-weight: 600; white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+.su-table tbody tr { border-bottom: 1px solid var(--border-soft); }
+.su-table tbody tr:last-child { border-bottom: none; }
+.su-table tbody td { padding: 10px 12px; }
+.su-cell-bold { font-weight: 600; color: var(--t-base); }
+.su-muted    { color: var(--t-muted); }
+.su-nowrap   { white-space: nowrap; }
+.su-actions  { text-align: right; white-space: nowrap; display: flex; gap: 4px; justify-content: flex-end; align-items: center; padding-right: 8px !important; }
+
+.su-icon-btn {
+  width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center;
+  color: var(--t-muted); border: 1px solid transparent; transition: all 150ms;
+}
+.su-icon-btn:hover:not(:disabled) { background: var(--bg-muted); color: var(--t-base); border-color: var(--border); }
+.su-icon-btn.danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
+.su-icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ── SystemUsers — modal ───────────────────────────────────────── */
+.su-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: var(--overlay);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+  backdrop-filter: blur(2px);
+}
+.su-modal {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 14px; box-shadow: var(--shadow-lg, 0 20px 60px rgba(0,0,0,.25));
+  width: 100%; max-width: 500px; max-height: 90vh;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.su-modal-sm { max-width: 380px; }
+.su-modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 20px 14px; border-bottom: 1px solid var(--border-soft);
+}
+.su-modal-head h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--t-base); }
+.su-modal-close {
+  width: 28px; height: 28px; border-radius: 6px; display: grid; place-items: center;
+  color: var(--t-muted); font-size: 14px; transition: background 150ms;
+}
+.su-modal-close:hover { background: var(--bg-muted); color: var(--t-base); }
+.su-modal-body { padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+.su-modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
+.su-field { display: flex; flex-direction: column; gap: 5px; }
+.su-field label { font-size: 12px; font-weight: 600; color: var(--t-muted); text-transform: uppercase; letter-spacing: .04em; }
+.su-field input, .su-field select {
+  padding: 9px 11px; border-radius: 8px; font-size: 13px;
+  background: var(--bg-input, var(--bg-muted)); color: var(--t-base);
+  border: 1px solid var(--border); outline: none; transition: border-color 150ms;
+}
+.su-field input:focus, .su-field select:focus { border-color: var(--primary); }
+.su-field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.su-form-error { margin: 0; font-size: 12.5px; color: var(--danger); padding: 8px 12px; background: var(--danger-soft); border-radius: 7px; }
+
+/* ── Danger button (delete confirm) ───────────────────────────── */
+.btn--danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+.btn--danger:hover:not(:disabled) { filter: brightness(1.1); }
+.btn--danger:disabled { opacity: 0.6; cursor: not-allowed; }
