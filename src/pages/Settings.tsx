@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useToast, ToastContainer } from '../components/Toast'
 
 type DbEngine = 'postgresql' | 'mysql' | 'mariadb'
 
@@ -42,11 +43,12 @@ type SaveState = 'idle' | 'saving' | 'saved' | 'error' | 'testing' | 'test-ok' |
 
 export default function Settings() {
   const [db, setDb] = useState<DbConfig>({
-    engine: 'postgresql', host: '', port: '5432', database: 'worsyn',
-    username: '', password: '', ssl: false, poolMin: '2', poolMax: '10',
+    engine: 'postgresql', host: 'localhost', port: '5432', database: 'worsyn',
+    username: 'worsyn', password: 'worsyn', ssl: false, poolMin: '2', poolMax: '10',
   })
   const [saveState, setSaveState] = useState<SaveState>('idle')
   const [showPassword, setShowPassword] = useState(false)
+  const { show, toasts, dismiss } = useToast()
 
   const setEngine = (engine: DbEngine) => {
     setDb(prev => ({ ...prev, engine, ...defaults[engine] }))
@@ -58,15 +60,27 @@ export default function Settings() {
 
   const handleTest = () => {
     setSaveState('testing')
-    // Simulate async test — replace with real API call in phase 2
-    setTimeout(() => setSaveState(db.host && db.database && db.username ? 'test-ok' : 'test-fail'), 1400)
+    const ok = !!(db.host && db.database && db.username)
+    setTimeout(() => {
+      const result = ok ? 'test-ok' : 'test-fail'
+      setSaveState(result)
+      if (ok) {
+        show('success', 'Conexión exitosa', `${db.engine}://${db.host}:${db.port}/${db.database}`)
+      } else {
+        show('danger', 'Conexión fallida', 'Verifica el host, base de datos y credenciales.')
+      }
+      setTimeout(() => setSaveState('idle'), 3000)
+    }, 1400)
   }
 
   const handleSave = () => {
     setSaveState('saving')
     // Simulate save — replace with POST /api/v1/admin/settings/database in phase 2
-    setTimeout(() => setSaveState('saved'), 900)
-    setTimeout(() => setSaveState('idle'), 3000)
+    setTimeout(() => {
+      setSaveState('saved')
+      show('success', 'Configuración guardada', 'Los cambios se aplicarán en el próximo reinicio.')
+      setTimeout(() => setSaveState('idle'), 3000)
+    }, 900)
   }
 
   const engine = engines.find(e => e.value === db.engine)!
@@ -296,6 +310,7 @@ export default function Settings() {
         </section>
 
       </div>
+      <ToastContainer toasts={toasts} onDismiss={dismiss} />
     </main>
   )
 }

@@ -22,6 +22,7 @@ const titles: Record<string, { label: string; parent: string }> = {
   '/users':         { label: 'Usuarios',       parent: 'Gestión' },
   '/billing':       { label: 'Facturación',    parent: 'Finanzas' },
   '/system':        { label: 'Sistema',        parent: 'Infraestructura' },
+  '/system-users':  { label: 'Usuarios del Sistema', parent: 'Principal' },
   '/settings':              { label: 'Configuración',  parent: 'Sistema' },
   '/settings/database':     { label: 'Base de datos',   parent: 'Configuración' },
   '/settings/general':      { label: 'General',          parent: 'Configuración' },
