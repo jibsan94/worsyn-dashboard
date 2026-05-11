@@ -100,7 +100,7 @@ export default function Sidebar() {
   const location = useLocation()
   const inSettings = location.pathname.startsWith('/settings')
   const [settingsOpen, setSettingsOpen] = useState(inSettings)
-  const { hasRole } = useAuth()
+  const { hasRole, user } = useAuth()
   const showAdminNav = hasRole('admin', 'owner')
 
   return (
@@ -183,10 +183,16 @@ export default function Sidebar() {
       {/* Footer */}
       <div className="sidebar-footer">
         <div className="workspace">
-          <div className="workspace-avatar">W</div>
+          <div className="workspace-avatar">
+            {user
+              ? (user.full_name
+                  ? user.full_name.split(' ').map((w: string) => w[0]).slice(0, 2).join('').toUpperCase()
+                  : user.username.slice(0, 2).toUpperCase())
+              : 'W'}
+          </div>
           <div className="workspace-text">
-            <div className="workspace-name">Operador</div>
-            <div className="workspace-role">admin@worsyn.app</div>
+            <div className="workspace-name">{user?.full_name ?? user?.username ?? 'Operador'}</div>
+            <div className="workspace-role">{user?.email ?? ''}</div>
           </div>
           <div className="workspace-chev">
             <svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round"/></svg>
