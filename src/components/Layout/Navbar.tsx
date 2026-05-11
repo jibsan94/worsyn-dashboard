@@ -6,6 +6,12 @@ const titles: Record<string, { label: string; parent: string }> = {
   '/users':         { label: 'Usuarios',       parent: 'Gestión' },
   '/billing':       { label: 'Facturación',    parent: 'Finanzas' },
   '/system':        { label: 'Sistema',        parent: 'Infraestructura' },
+  '/settings':              { label: 'Configuración',  parent: 'Sistema' },
+  '/settings/database':     { label: 'Base de datos',   parent: 'Configuración' },
+  '/settings/general':      { label: 'General',          parent: 'Configuración' },
+  '/settings/security':     { label: 'Seguridad',        parent: 'Configuración' },
+  '/settings/email':        { label: 'Correo SMTP',      parent: 'Configuración' },
+  '/settings/integrations': { label: 'Integraciones',    parent: 'Configuración' },
 }
 
 export default function Navbar() {
