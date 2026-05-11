@@ -2,8 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ============ DESIGN TOKENS ============ */
-:root {
+/* ============ DESIGN TOKENS — light (default) ============ */
+:root, :root[data-theme="light"] {
   --bg-body:       #F0F4F8;
   --bg-card:       #FFFFFF;
   --bg-sidebar:    #FFFFFF;
@@ -38,6 +38,37 @@
   --shadow-card:   0 1px 3px 0 rgb(15 23 42 / 0.06), 0 1px 2px -1px rgb(15 23 42 / 0.04);
   --shadow-lg:     0 10px 15px -3px rgb(15 23 42 / 0.08), 0 4px 6px -4px rgb(15 23 42 / 0.05);
   --overlay:       rgba(240, 244, 248, 0.72);
+}
+
+/* ============ DESIGN TOKENS — dark ============ */
+:root[data-theme="dark"] {
+  --bg-body:       #0B1120;
+  --bg-card:       #141B2D;
+  --bg-sidebar:    #141B2D;
+  --bg-hover:      #1C2438;
+  --bg-muted:      #1A2237;
+  --t-base:        #F1F5F9;
+  --t-muted:       #94A3B8;
+  --t-light:       #64748B;
+  --t-inverse:     #0B1120;
+  --border:        #222C42;
+  --border-soft:   #1A2237;
+  --primary:       #60A5FA;
+  --primary-light: #93C5FD;
+  --primary-dark:  #3B82F6;
+  --primary-soft:  #0F2847;
+  --primary-ring:  rgba(96, 165, 250, 0.24);
+  --success:       #34D399;  --success-soft:  #0F2A20;
+  --warning:       #FBBF24;  --warning-soft:  #2B1F08;
+  --danger:        #F87171;  --danger-soft:   #2B1414;
+  --info:          #38BDF8;  --info-soft:     #0D2232;
+  --purple:        #A78BFA;  --purple-soft:   #1E1A2C;
+  --teal:          #2DD4BF;  --teal-soft:     #0E2826;
+  --orange:        #FB923C;  --orange-soft:   #2A1810;
+  --shadow-sm:     0 1px 2px 0 rgb(0 0 0 / 0.4);
+  --shadow-card:   0 1px 3px 0 rgb(0 0 0 / 0.3), 0 1px 2px -1px rgb(0 0 0 / 0.25);
+  --shadow-lg:     0 10px 15px -3px rgb(0 0 0 / 0.5), 0 4px 6px -4px rgb(0 0 0 / 0.4);
+  --overlay:       rgba(11, 17, 32, 0.72);
 }
 
 /* ============ RESET + BASE ============ */

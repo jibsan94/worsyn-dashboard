@@ -83,7 +83,7 @@ export default function Settings() {
       <section className="hero">
         <div className="hero-text">
           <span className="eyebrow">Administración</span>
-          <h1 className="hero-title">Configura<span className="accent">ción</span></h1>
+          <h1 className="hero-title">Configuración</h1>
           <p className="hero-sub">Parámetros del sistema Worsyn. Los cambios se aplican en el próximo reinicio del servicio.</p>
         </div>
       </section>
