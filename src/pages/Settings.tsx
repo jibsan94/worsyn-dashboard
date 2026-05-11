@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-type DbEngine = 'mariadb' | 'mysql' | 'postgresql' | 'oracle'
+type DbEngine = 'postgresql' | 'mysql' | 'mariadb'
 
 interface DbConfig {
   engine: DbEngine
@@ -15,38 +15,34 @@ interface DbConfig {
 }
 
 const engines: { value: DbEngine; label: string; logo: string; defaultPort: string; color: string }[] = [
-  { value: 'mariadb',    label: 'MariaDB',     logo: 'M', defaultPort: '3306',  color: '#C0765A' },
-  { value: 'mysql',      label: 'MySQL',       logo: 'My', defaultPort: '3306',  color: '#00758F' },
   { value: 'postgresql', label: 'PostgreSQL',  logo: 'PG', defaultPort: '5432',  color: '#336791' },
-  { value: 'oracle',     label: 'Oracle DB',   logo: 'O', defaultPort: '1521',  color: '#C74634' },
+  { value: 'mysql',      label: 'MySQL',       logo: 'My', defaultPort: '3306',  color: '#00758F' },
+  { value: 'mariadb',    label: 'MariaDB',     logo: 'M',  defaultPort: '3306',  color: '#C0765A' },
 ]
 
 const defaults: Record<DbEngine, Partial<DbConfig>> = {
-  mariadb:    { port: '3306',  ssl: false },
-  mysql:      { port: '3306',  ssl: false },
   postgresql: { port: '5432',  ssl: true  },
-  oracle:     { port: '1521',  ssl: true  },
+  mysql:      { port: '3306',  ssl: false },
+  mariadb:    { port: '3306',  ssl: false },
 }
 
 const placeholders: Record<DbEngine, { database: string; username: string }> = {
-  mariadb:    { database: 'worsyn_db',    username: 'worsyn_user' },
-  mysql:      { database: 'worsyn_db',    username: 'worsyn_user' },
   postgresql: { database: 'worsyn',       username: 'worsyn_admin' },
-  oracle:     { database: 'ORCL',          username: 'WORSYN' },
+  mysql:      { database: 'worsyn_db',    username: 'worsyn_user' },
+  mariadb:    { database: 'worsyn_db',    username: 'worsyn_user' },
 }
 
 const connectionStrings: Record<DbEngine, (c: DbConfig) => string> = {
-  mariadb:    c => `mysql+pymysql://${c.username}:****@${c.host}:${c.port}/${c.database}`,
+  postgresql: c => `postgresql+asyncpg://${c.username}:****@${c.host}:${c.port}/${c.database}`,
   mysql:      c => `mysql+pymysql://${c.username}:****@${c.host}:${c.port}/${c.database}`,
-  postgresql: c => `postgresql+psycopg2://${c.username}:****@${c.host}:${c.port}/${c.database}`,
-  oracle:     c => `oracle+cx_oracle://${c.username}:****@${c.host}:${c.port}/?service_name=${c.database}`,
+  mariadb:    c => `mysql+pymysql://${c.username}:****@${c.host}:${c.port}/${c.database}`,
 }
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error' | 'testing' | 'test-ok' | 'test-fail'
 
 export default function Settings() {
   const [db, setDb] = useState<DbConfig>({
-    engine: 'mariadb', host: '', port: '3306', database: '',
+    engine: 'postgresql', host: '', port: '5432', database: 'worsyn',
     username: '', password: '', ssl: false, poolMin: '2', poolMax: '10',
   })
   const [saveState, setSaveState] = useState<SaveState>('idle')
