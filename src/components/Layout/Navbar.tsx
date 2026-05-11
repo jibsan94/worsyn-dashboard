@@ -24,6 +24,7 @@ const titles: Record<string, { label: string; parent: string }> = {
   '/billing':       { label: 'Facturación',    parent: 'Finanzas' },
   '/system':        { label: 'Sistema',        parent: 'Infraestructura' },
   '/system-users':  { label: 'Usuarios del Sistema', parent: 'Principal' },
+  '/profile':               { label: 'Mi Perfil',      parent: 'Cuenta' },
   '/settings':              { label: 'Configuración',  parent: 'Sistema' },
   '/settings/database':     { label: 'Base de datos',   parent: 'Configuración' },
   '/settings/general':      { label: 'General',          parent: 'Configuración' },
@@ -119,6 +120,16 @@ export default function Navbar() {
                 <div className="user-menu-name">{user?.full_name ?? user?.username ?? '—'}</div>
                 <div className="user-menu-role">{user?.role ?? ''}</div>
               </div>
+
+              <button className="user-menu-item" onClick={() => { setMenuOpen(false); navigate('/profile') }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                  <circle cx="12" cy="7" r="4"/>
+                </svg>
+                Perfil
+              </button>
+
+              <div className="user-menu-divider" />
 
               <button className="user-menu-item danger" onClick={handleLogout}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">

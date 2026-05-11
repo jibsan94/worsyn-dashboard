@@ -18,7 +18,7 @@ export default function Layout() {
               <line x1="12" y1="9" x2="12" y2="13"/>
               <line x1="12" y1="17" x2="12.01" y2="17"/>
             </svg>
-            <span>Debes cambiar tu contrase&ntilde;a antes de continuar. Ve a <strong>Configuraci&oacute;n &rsaquo; Seguridad</strong>.</span>
+            <span>Debes cambiar tu contrase&ntilde;a antes de continuar. Ve a <strong>Perfil &rsaquo; Seguridad</strong>.</span>
           </div>
         )}
         <Outlet />
