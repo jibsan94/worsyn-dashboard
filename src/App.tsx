@@ -17,6 +17,7 @@ import SettingsGeneralPage from './pages/SettingsGeneral'
 import SettingsSecurityPage from './pages/SettingsSecurity'
 import SettingsEmailPage from './pages/SettingsEmail'
 import SettingsIntegrationsPage from './pages/SettingsIntegrations'
+import SettingsRolesPage from './pages/SettingsRoles'
 import TenantPortalPage from './pages/TenantPortal'
 
 export default function App() {
@@ -46,6 +47,7 @@ export default function App() {
               <Route path="/settings/security" element={<SettingsSecurityPage />} />
               <Route path="/settings/email" element={<SettingsEmailPage />} />
               <Route path="/settings/integrations" element={<SettingsIntegrationsPage />} />
+              <Route path="/settings/roles" element={<SettingsRolesPage />} />
             </Route>
             {/* System users — admin + owner only */}
             <Route element={<RoleRoute roles={['admin', 'owner']} />}>

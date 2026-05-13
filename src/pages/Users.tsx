@@ -10,8 +10,8 @@ interface Member {
   role: string; is_active: boolean; joined_at: string; updated_at: string
 }
 
-const ROLE_LABEL: Record<string, string> = { admin: 'Admin org', leader: 'Líder' }
-const ROLE_CLASS: Record<string, string> = { admin: 't-pro', leader: 't-teams' }
+const ROLE_LABEL: Record<string, string> = { admin: 'Admin org', leader: 'Líder', member: 'Miembro' }
+const ROLE_CLASS: Record<string, string> = { admin: 't-pro', leader: 't-teams', member: 't-free' }
 
 function initials(m: Member) {
   const n = m.full_name ?? m.email
@@ -189,6 +189,7 @@ export default function Users() {
                 <option value="">Todos los roles</option>
                 <option value="admin">Admin org</option>
                 <option value="leader">Líder</option>
+                    <option value="member">Miembro</option>
               </select>
               <select value={filterActive} onChange={e => setFilterActive(e.target.value)}
                 style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-input, var(--bg-muted))', color: 'var(--t-base)', fontSize: 13 }}>
@@ -310,6 +311,7 @@ export default function Users() {
                     onChange={e => setEditForm(f => ({ ...f, role: e.target.value }))} disabled={saving}>
                     <option value="admin">Admin org</option>
                     <option value="leader">Líder</option>
+                    <option value="member">Miembro</option>
                   </select>
                 </div>
               </div>

@@ -8,8 +8,8 @@ interface Member {
   role: string; is_active: boolean; joined_at: string; updated_at: string
 }
 
-const ROLE_LABEL: Record<string, string> = { admin: 'Admin org', leader: 'Líder' }
-const ROLE_CLASS: Record<string, string> = { admin: 't-pro', leader: 't-teams' }
+const ROLE_LABEL: Record<string, string> = { admin: 'Admin org', leader: 'Líder', member: 'Miembro' }
+const ROLE_CLASS: Record<string, string> = { admin: 't-pro', leader: 't-teams', member: 't-free' }
 
 function fmtDate(iso: string | null) {
   if (!iso) return '—'
@@ -196,6 +196,7 @@ export default function UserDetail() {
                   ? <select className="inline-input" value={editForm.role} onChange={e => setEditForm(f => ({ ...f, role: e.target.value }))}>
                       <option value="admin">Admin org</option>
                       <option value="leader">Líder</option>
+                    <option value="member">Miembro</option>
                     </select>
                   : <span className={`tag ${ROLE_CLASS[member.role] ?? ''}`}>{ROLE_LABEL[member.role] ?? member.role}</span>}</td>
               </tr>
