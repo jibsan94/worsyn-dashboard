@@ -5,6 +5,7 @@ import RoleRoute from './components/RoleRoute'
 import LoginPage from './pages/Login'
 import DashboardPage from './pages/Dashboard'
 import OrganizationsPage from './pages/Organizations'
+import OrganizationDetailPage from './pages/OrganizationDetail'
 import UsersPage from './pages/Users'
 import BillingPage from './pages/Billing'
 import SystemPage from './pages/System'
@@ -15,6 +16,7 @@ import SettingsGeneralPage from './pages/SettingsGeneral'
 import SettingsSecurityPage from './pages/SettingsSecurity'
 import SettingsEmailPage from './pages/SettingsEmail'
 import SettingsIntegrationsPage from './pages/SettingsIntegrations'
+import TenantPortalPage from './pages/TenantPortal'
 
 export default function App() {
   return (
@@ -22,12 +24,14 @@ export default function App() {
       <Routes>
         {/* Public */}
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/portal/:slug" element={<TenantPortalPage />} />
 
         {/* Protected — requires auth */}
         <Route element={<ProtectedRoute />}>
           <Route element={<Layout />}>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/organizations" element={<OrganizationsPage />} />
+            <Route path="/organizations/:id" element={<OrganizationDetailPage />} />
             <Route path="/users" element={<UsersPage />} />
             <Route path="/billing" element={<BillingPage />} />
             <Route path="/system" element={<SystemPage />} />

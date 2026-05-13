@@ -887,3 +887,57 @@ body {
 .btn--danger { background: var(--danger); color: #fff; border-color: var(--danger); }
 .btn--danger:hover:not(:disabled) { filter: brightness(1.1); }
 .btn--danger:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ── Generic modal (Organizations) ────────────────────────────── */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0,0,0,0.45); backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center;
+}
+.modal {
+  background: var(--bg-card); border-radius: 14px; width: 100%; max-width: 520px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.25); display: flex; flex-direction: column;
+  max-height: 90vh; overflow: hidden;
+}
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 20px 14px; border-bottom: 1px solid var(--border);
+}
+.modal-title { margin: 0; font-size: 15px; font-weight: 700; color: var(--t-base); }
+.modal-close {
+  width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+  color: var(--t-muted); font-size: 14px; transition: background 150ms;
+}
+.modal-close svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; }
+.modal-close:hover { background: var(--bg-muted); color: var(--t-base); }
+.modal-body { padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+.modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding-top: 8px; }
+
+/* ── Form fields (generic) ─────────────────────────────────────── */
+.form-field { display: flex; flex-direction: column; gap: 5px; }
+.form-field label { font-size: 12px; font-weight: 600; color: var(--t-muted); text-transform: uppercase; letter-spacing: .04em; }
+.form-field input, .form-field select {
+  padding: 9px 11px; border-radius: 8px; font-size: 13px;
+  background: var(--bg-input, var(--bg-muted)); color: var(--t-base);
+  border: 1px solid var(--border); outline: none; transition: border-color 150ms;
+}
+.form-field input:focus, .form-field select:focus { border-color: var(--primary); }
+.form-field span { font-size: 11px; color: var(--t-muted); }
+
+/* ── Inline table editing ──────────────────────────────────────── */
+.inline-input {
+  padding: 4px 8px; border-radius: 6px; font-size: 13px; width: 100%;
+  background: var(--bg-input, var(--bg-muted)); color: var(--t-base);
+  border: 1px solid var(--border); outline: none;
+}
+.inline-input:focus { border-color: var(--primary); }
+
+/* ── Banner error ──────────────────────────────────────────────── */
+.banner--error {
+  padding: 10px 14px; border-radius: 8px; font-size: 13px;
+  background: var(--danger-soft); color: var(--danger);
+  border: 1px solid var(--danger, #ef4444);
+}
+
+/* ── Muted tag ─────────────────────────────────────────────────── */
+.tag.tag--muted { background: var(--bg-muted); color: var(--t-muted); border: 1px solid var(--border); }
