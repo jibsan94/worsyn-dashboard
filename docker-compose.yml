@@ -6,9 +6,9 @@
 services:
   frontend:
     build: .
-    container_name: woven-frontend
+    container_name: worsyn-dashboard
     ports:
-      - "3001:80"
+      - "80:80"
     restart: unless-stopped
 
   # ── Fase 2: descomentar cuando el backend esté listo ───────
