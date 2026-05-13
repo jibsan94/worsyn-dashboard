@@ -134,7 +134,7 @@ export default function Organizations() {
         await fetch(`/api/v1/organizations/${data.id}/members`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ ...initUser, role: 'owner' }),
+          body: JSON.stringify({ ...initUser, role: 'admin' }),
         })
       }
 

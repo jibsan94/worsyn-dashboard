@@ -7,6 +7,7 @@ import DashboardPage from './pages/Dashboard'
 import OrganizationsPage from './pages/Organizations'
 import OrganizationDetailPage from './pages/OrganizationDetail'
 import UsersPage from './pages/Users'
+import UserDetailPage from './pages/UserDetail'
 import BillingPage from './pages/Billing'
 import SystemPage from './pages/System'
 import SystemUsersPage from './pages/SystemUsers'
@@ -33,6 +34,7 @@ export default function App() {
             <Route path="/organizations" element={<OrganizationsPage />} />
             <Route path="/organizations/:id" element={<OrganizationDetailPage />} />
             <Route path="/users" element={<UsersPage />} />
+            <Route path="/users/:id" element={<UserDetailPage />} />
             <Route path="/billing" element={<BillingPage />} />
             <Route path="/system" element={<SystemPage />} />
             <Route path="/profile" element={<ProfilePage />} />
