@@ -10,6 +10,7 @@ interface AdminUser {
   role: 'user' | 'admin' | 'owner'
   is_active: boolean
   must_change_password: boolean
+  two_factor_enabled: boolean
   created_at: string
   last_login_at: string | null
 }
@@ -204,11 +205,12 @@ export default function SystemUsers() {
                 </thead>
                 <tbody>
                   {users.map(u => (
-                    <tr key={u.id}>
+                    <tr key={u.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/system-users/${u.id}`)}>
                       <td className="su-cell-bold">
                         {u.username}
                         {u.id === me?.id && <span className="tag t-info" style={{ marginLeft: 6, fontSize: 10 }}>Tú</span>}
                         {u.must_change_password && <span className="tag t-warn" style={{ marginLeft: 6, fontSize: 10 }}>Cred. pendiente</span>}
+                        {u.two_factor_enabled && <span className="tag t-ok" style={{ marginLeft: 6, fontSize: 10 }}>2FA</span>}
                       </td>
                       <td className="su-muted">{u.email}</td>
                       <td className="su-muted">{u.full_name ?? '—'}</td>
@@ -219,7 +221,7 @@ export default function SystemUsers() {
                           ? new Date(u.last_login_at).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })
                           : '—'}
                       </td>
-                      <td className="su-actions">
+                      <td className="su-actions" onClick={e => e.stopPropagation()}>
                         <button
                           className="su-icon-btn"
                           title={canEdit(u) ? 'Editar' : 'Sin permisos para editar este usuario'}

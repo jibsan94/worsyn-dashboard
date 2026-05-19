@@ -11,6 +11,7 @@ import UserDetailPage from './pages/UserDetail'
 import BillingPage from './pages/Billing'
 import SystemPage from './pages/System'
 import SystemUsersPage from './pages/SystemUsers'
+import SystemUserDetailPage from './pages/SystemUserDetail'
 import ProfilePage from './pages/Profile'
 import SettingsPage from './pages/Settings'
 import SettingsGeneralPage from './pages/SettingsGeneral'
@@ -52,6 +53,7 @@ export default function App() {
             {/* System users — admin + owner only */}
             <Route element={<RoleRoute roles={['admin', 'owner']} />}>
               <Route path="/system-users" element={<SystemUsersPage />} />
+              <Route path="/system-users/:id" element={<SystemUserDetailPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
