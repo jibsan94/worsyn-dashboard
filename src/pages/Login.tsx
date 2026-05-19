@@ -46,6 +46,7 @@ export default function Login() {
         full_name: me.full_name,
         role: me.role,
         must_change_password: data.must_change_password,
+        avatar: me.avatar ?? null,
       })
 
       navigate('/', { replace: true })

@@ -15,6 +15,7 @@ export interface AuthUser {
   full_name: string | null
   role: AdminRole
   must_change_password: boolean
+  avatar: string | null
 }
 
 interface AuthState {

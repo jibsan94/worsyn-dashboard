@@ -111,7 +111,10 @@ export default function Navbar() {
             role="button"
             aria-expanded={menuOpen}
           >
-            {initials}
+            {user?.avatar
+              ? <img src={user.avatar} alt={user.username} className="topbar-avatar-img" />
+              : initials
+            }
           </div>
 
           {menuOpen && (

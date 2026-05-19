@@ -1,8 +1,9 @@
-import { useState, FormEvent } from 'react'
+import { useState, FormEvent, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
 
 type PwdState     = 'idle' | 'saving' | 'saved' | 'error'
 type ProfileState = 'idle' | 'saving' | 'saved' | 'error'
+type AvatarState  = 'idle' | 'saving' | 'saved' | 'error'
 
 const EyeOff = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
@@ -29,6 +30,12 @@ export default function Profile() {
   const [profFullName, setProfFullName] = useState(user?.full_name ?? '')
   const [profState,    setProfState]    = useState<ProfileState>('idle')
   const [profError,    setProfError]    = useState<string | null>(null)
+
+  // Avatar
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(user?.avatar ?? null)
+  const [avatarState,   setAvatarState]   = useState<AvatarState>('idle')
+  const [avatarError,   setAvatarError]   = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Password fields
   const [currentPwd,  setCurrentPwd]  = useState('')
@@ -90,11 +97,73 @@ export default function Profile() {
     }
   }
 
+  const handleAvatarFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!file.type.startsWith('image/')) { setAvatarError('Solo se permiten imágenes.'); return }
+    if (file.size > 10 * 1024 * 1024) { setAvatarError('La imagen no puede superar los 10 MB.'); e.target.value = ''; return }
+
+    const reader = new FileReader()
+    reader.onload = ev => {
+      const src = ev.target?.result as string
+      const img = new Image()
+      img.onload = () => {
+        const MAX = 256
+        const scale = Math.min(1, MAX / Math.max(img.width, img.height))
+        const canvas = document.createElement('canvas')
+        canvas.width  = Math.round(img.width  * scale)
+        canvas.height = Math.round(img.height * scale)
+        canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height)
+        setAvatarPreview(canvas.toDataURL('image/jpeg', 0.82))
+        setAvatarError(null)
+      }
+      img.src = src
+    }
+    reader.readAsDataURL(file)
+    e.target.value = ''
+  }
+
+  const handleSaveAvatar = async () => {
+    setAvatarError(null); setAvatarState('saving')
+    try {
+      const r = await fetch(`/api/v1/admin/users/${user!.id}/avatar`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ avatar: avatarPreview }),
+      })
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) { setAvatarError(data.detail ?? 'Error al guardar.'); setAvatarState('error'); return }
+      if (user) setSession(token!, { ...user, avatar: data.avatar ?? null })
+      setAvatarState('saved')
+    } catch {
+      setAvatarError('No se pudo conectar con el servidor.'); setAvatarState('error')
+    }
+  }
+
+  const handleRemoveAvatar = async () => {
+    setAvatarError(null); setAvatarState('saving')
+    try {
+      const r = await fetch(`/api/v1/admin/users/${user!.id}/avatar`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ avatar: null }),
+      })
+      if (!r.ok) { setAvatarError('Error al eliminar.'); setAvatarState('error'); return }
+      setAvatarPreview(null)
+      if (user) setSession(token!, { ...user, avatar: null })
+      setAvatarState('saved')
+    } catch {
+      setAvatarError('No se pudo conectar con el servidor.'); setAvatarState('error')
+    }
+  }
+
   const initials = user
     ? (user.full_name
         ? user.full_name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
         : user.username.slice(0, 2).toUpperCase())
     : '?'
+
+  const avatarChanged = avatarPreview !== (user?.avatar ?? null)
 
   return (
     <main className="content">
@@ -124,7 +193,40 @@ export default function Profile() {
           </div>
 
           <div className="profile-avatar-wrap">
-            <div className="profile-avatar">{initials}</div>
+            <div className="profile-avatar-container">
+              {avatarPreview
+                ? <img src={avatarPreview} alt="Avatar" className="profile-avatar profile-avatar--img" />
+                : <div className="profile-avatar">{initials}</div>
+              }
+              <button
+                type="button"
+                className="profile-avatar-overlay"
+                onClick={() => fileInputRef.current?.click()}
+                title="Cambiar foto"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" width={18} height={18}>
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                  <circle cx="12" cy="13" r="4"/>
+                </svg>
+              </button>
+              <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleAvatarFile} />
+            </div>
+            {avatarError && <p className="su-form-error" style={{ marginTop: 8, textAlign: 'center' }}>{avatarError}</p>}
+            <div className="profile-avatar-actions">
+              {avatarChanged && (
+                <button type="button" className="btn btn--primary btn--sm" onClick={handleSaveAvatar} disabled={avatarState === 'saving'}>
+                  {avatarState === 'saving' ? <><span className="spinner light" /> Guardando...</> : 'Guardar foto'}
+                </button>
+              )}
+              {avatarPreview && !avatarChanged && (
+                <button type="button" className="btn btn--ghost btn--sm" onClick={handleRemoveAvatar} disabled={avatarState === 'saving'}>
+                  Eliminar foto
+                </button>
+              )}
+              {avatarState === 'saved' && !avatarChanged && (
+                <span className="tag t-ok" style={{ marginTop: 4 }}>Guardado</span>
+              )}
+            </div>
           </div>
 
           {canEdit ? (
