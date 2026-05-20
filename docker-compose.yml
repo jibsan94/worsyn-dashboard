@@ -10,6 +10,13 @@ services:
     ports:
       - "80:80"
     restart: unless-stopped
+    networks:
+      - worsyn_net
+
+networks:
+  worsyn_net:
+    external: true
+    name: worsyn-backend_worsyn
 
   # ── Fase 2: descomentar cuando el backend esté listo ───────
   # backend:
