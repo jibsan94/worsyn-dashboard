@@ -9,8 +9,12 @@ type LoginStep = 'credentials' | 'totp'
 const BrandBlock = () => (
   <div className="login-brand">
     <div className="login-brand-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
-        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+      <svg viewBox="0 0 44 32" xmlns="http://www.w3.org/2000/svg" aria-label="Worsyn">
+        <rect x="0"    y="2"  width="7" height="28" rx="3.5" fill="white"/>
+        <rect x="10"   y="16" width="7" height="14" rx="3.5" fill="white"/>
+        <rect x="18.5" y="8"  width="7" height="22" rx="3.5" fill="white"/>
+        <rect x="27"   y="16" width="7" height="14" rx="3.5" fill="white"/>
+        <rect x="37"   y="2"  width="7" height="28" rx="3.5" fill="white"/>
       </svg>
     </div>
     <div>

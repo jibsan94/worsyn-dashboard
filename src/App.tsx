@@ -20,6 +20,7 @@ import SettingsEmailPage from './pages/SettingsEmail'
 import SettingsIntegrationsPage from './pages/SettingsIntegrations'
 import SettingsRolesPage from './pages/SettingsRoles'
 import TenantPortalPage from './pages/TenantPortal'
+import SystemLogsPage from './pages/SystemLogs'
 
 export default function App() {
   return (
@@ -54,6 +55,10 @@ export default function App() {
             <Route element={<RoleRoute roles={['admin', 'owner']} />}>
               <Route path="/system-users" element={<SystemUsersPage />} />
               <Route path="/system-users/:id" element={<SystemUserDetailPage />} />
+            </Route>
+            {/* Audit logs — owner only */}
+            <Route element={<RoleRoute roles={['owner']} />}>
+              <Route path="/logs" element={<SystemLogsPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
