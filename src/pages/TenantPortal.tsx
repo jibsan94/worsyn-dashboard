@@ -3,12 +3,16 @@ import { useParams } from 'react-router-dom'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface OrgInfo { id: string; name: string; slug: string; alias: string | null; plan: string }
-type Screen      = 'loading' | 'not-found' | 'login' | 'app'
-type TModule     = 'principal' | 'servicios' | 'miembros' | 'equipos' | 'partituras' | 'eventos' | 'ensayos' | 'calendario' | 'finanzas'
-type MiembrosTab = 'dashboard' | 'miembros' | 'flujos'
+interface OrgInfo {
+  id: string; name: string; slug: string; alias: string | null; plan: string
+  ministries: string[]; member_roles: string[]; icon: string | null; require_2fa_admins: boolean
+}
+type Screen       = 'loading' | 'not-found' | 'login' | 'app'
+type TModule      = 'principal' | 'servicios' | 'miembros' | 'equipos' | 'partituras' | 'eventos' | 'ensayos' | 'calendario' | 'finanzas' | 'configuracion'
+type MiembrosTab  = 'dashboard' | 'miembros' | 'flujos'
 type MiembrosView = 'todas' | 'ministerio' | 'nuevos'
-type OrgRole     = 'admin' | 'lider' | 'miembro'
+type OrgRole      = 'admin' | 'lider' | 'miembro'
+type SettingsTab  = 'general' | 'ministerios' | 'roles' | 'admins' | 'integraciones' | 'facturacion'
 
 interface Person {
   id: string; name: string; initials: string; color: string
@@ -65,7 +69,7 @@ const PREDEFINED_ROLES = [
   'Vocalista', 'Profesor',
 ]
 
-const MINISTRIES = ['Alabanza', 'Técnica', 'Administración', 'Jóvenes', 'Niños', 'Predicación', 'Otro']
+const DEFAULT_MINISTRIES = ['Alabanza', 'Audio/Visual', 'Pastoral', 'Jóvenes', 'Niños']
 
 const AVATAR_COLORS = ['#6366f1','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#6d28d9']
 
@@ -259,11 +263,26 @@ export default function TenantPortal() {
   const [editTarget, setEditTarget]       = useState<Person | null>(null)
   const [editForm, setEditForm]           = useState<MemberForm>(EMPTY_FORM)
   const [editErr, setEditErr]             = useState<string | null>(null)
+  const [isEditingMember, setIsEditingMember] = useState(false)
   const [deleteTarget, setDeleteTarget]   = useState<Person | null>(null)
 
+  // ── Settings
+  const [settingsTab, setSettingsTab]     = useState<SettingsTab>('general')
+  const [sName, setSName]                 = useState('')
+  const [sAlias, setSAlias]               = useState('')
+  const [sIcon, setSIcon]                 = useState<string | null>(null)
+  const [sMins, setSMins]                 = useState<string[]>([])
+  const [sRoles, setSRoles]               = useState<string[]>([])
+  const [sRequire2FA, setSRequire2FA]     = useState(false)
+  const [sNewItem, setSNewItem]           = useState('')
+  const [sSaving, setSSaving]             = useState(false)
+  const [sSaved, setSSaved]               = useState(false)
+  const [sErr, setSErr]                   = useState<string | null>(null)
+
   // ── Refs
-  const dropRef   = useRef<HTMLDivElement>(null)
-  const logoutRef = useRef<HTMLDivElement>(null)
+  const dropRef     = useRef<HTMLDivElement>(null)
+  const logoutRef   = useRef<HTMLDivElement>(null)
+  const iconInputRef = useRef<HTMLInputElement>(null)
 
   const canEdit = userRole === 'admin' || userRole === 'lider'
 
@@ -416,8 +435,7 @@ export default function TenantPortal() {
     setEditErr(null)
   }
 
-  async function handleEditMember(e: React.FormEvent) {
-    e.preventDefault()
+  async function saveEditMember() {
     if (!editTarget) return
     const err = validateForm(editForm)
     if (err) { setEditErr(err); return }
@@ -443,8 +461,19 @@ export default function TenantPortal() {
     if (res.status === 409) { setEditErr('Ese correo ya está en uso'); return }
     if (!res.ok) { setEditErr('Error al guardar. Inténtalo de nuevo.'); return }
     const updated: ApiMember = await res.json()
-    setMembers(prev => prev.map((p, i) => p.id === editTarget.id ? apiToPerson(updated, i) : p))
+    const idx = members.findIndex(p => p.id === editTarget.id)
+    const updatedPerson = { ...apiToPerson(updated, idx >= 0 ? idx : 0), color: editTarget.color }
+    setMembers(prev => prev.map(p => p.id === editTarget.id ? updatedPerson : p))
+    if (isEditingMember) {
+      setSelectedMember(updatedPerson)
+      setIsEditingMember(false)
+    }
     setEditTarget(null); setEditErr(null)
+  }
+
+  async function handleEditMember(e: React.FormEvent) {
+    e.preventDefault()
+    await saveEditMember()
   }
 
   async function handleDeleteMember() {
@@ -458,6 +487,46 @@ export default function TenantPortal() {
     setDeleteTarget(null)
   }
 
+  // Init settings state when entering configuracion
+  useEffect(() => {
+    if (module !== 'configuracion' || !org) return
+    setSName(org.name)
+    setSAlias(org.alias ?? '')
+    setSIcon(org.icon)
+    setSMins((org.ministries?.length) ? [...org.ministries] : [...DEFAULT_MINISTRIES])
+    setSRoles((org.member_roles?.length) ? [...org.member_roles] : [...PREDEFINED_ROLES])
+    setSRequire2FA(org.require_2fa_admins ?? false)
+    setSNewItem(''); setSErr(null); setSSaved(false)
+  }, [module])
+
+  async function saveSettings(partial: Record<string, unknown>) {
+    if (!slug) return
+    setSSaving(true); setSErr(null)
+    const res = await fetch(`/api/v1/tenant/${slug}/settings`, {
+      method: 'PATCH',
+      headers: authHeaders(),
+      body: JSON.stringify(partial),
+    })
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}))
+      setSErr(d.detail ?? 'Error al guardar. Inténtalo de nuevo.')
+      setSSaving(false); return
+    }
+    const updated: OrgInfo = await res.json()
+    setOrg(updated)
+    setSSaved(true); setSSaving(false)
+    setTimeout(() => setSSaved(false), 3000)
+  }
+
+  function handleIconUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (file.size > 300 * 1024) { setSErr('Imagen demasiado grande (máx. 300 KB)'); return }
+    const reader = new FileReader()
+    reader.onload = ev => setSIcon(ev.target?.result as string)
+    reader.readAsDataURL(file)
+  }
+
   function toggleRole(role: string, f: MemberForm, setF: React.Dispatch<React.SetStateAction<MemberForm>>) {
     setF(prev => ({
       ...prev,
@@ -465,7 +534,7 @@ export default function TenantPortal() {
     }))
   }
 
-  const currentMod = MODULES.find(m => m.id === module)!
+  const currentMod = MODULES.find(m => m.id === module)
 
   // ── Loading screen
   if (screen === 'loading') return (
@@ -531,6 +600,8 @@ export default function TenantPortal() {
 
   // ── App shell ──────────────────────────────────────────────────────────────
 
+  const effectiveMinistries = (org?.ministries?.length ?? 0) > 0 ? org!.ministries : DEFAULT_MINISTRIES
+  const effectiveRoles      = (org?.member_roles?.length ?? 0) > 0 ? org!.member_roles : PREDEFINED_ROLES
   const allMinistries = [...new Set(members.map(p => p.ministry))].sort()
 
   const filteredMembers = members.filter(p => {
@@ -558,8 +629,10 @@ export default function TenantPortal() {
         {/* Left: module switcher */}
         <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }} ref={dropRef}>
           <button style={s.modBtn} onClick={() => setDropOpen(o => !o)}>
-            <span style={{ ...s.modIcon, background: currentMod.color }}>{currentMod.icon}</span>
-            <span style={s.modLabel}>{currentMod.label}</span>
+            <span style={{ ...s.modIcon, background: currentMod?.color ?? '#64748B' }}>
+              {currentMod?.icon ?? <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14}><path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd"/></svg>}
+            </span>
+            <span style={s.modLabel}>{currentMod?.label ?? 'Configuración'}</span>
             <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14}
               style={{ color: C.muted, marginLeft: 2, flexShrink: 0, transform: dropOpen ? 'rotate(180deg)' : 'none', transition: 'transform 160ms' }}>
               <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd"/>
@@ -586,15 +659,21 @@ export default function TenantPortal() {
               </div>
               <div style={s.dropDivider} />
               <div style={s.dropSection}>
-                <button style={s.dropItem} onClick={() => setDropOpen(false)}
-                  onMouseEnter={e => e.currentTarget.style.background = C.soft}
-                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                <button style={{ ...s.dropItem, ...(module === 'configuracion' ? s.dropItemActive : {}) }}
+                  onClick={() => { switchModule('configuracion') }}
+                  onMouseEnter={e => { if (module !== 'configuracion') e.currentTarget.style.background = C.soft }}
+                  onMouseLeave={e => { if (module !== 'configuracion') e.currentTarget.style.background = 'transparent' }}>
                   <span style={{ ...s.dropIcon, background: '#64748B' }}>
                     <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14}>
                       <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd"/>
                     </svg>
                   </span>
                   <span style={s.dropLabel}>Opciones de la cuenta</span>
+                  {module === 'configuracion' && (
+                    <svg viewBox="0 0 20 20" fill={C.primary} width={14} height={14} style={{ marginLeft: 'auto' }}>
+                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/>
+                    </svg>
+                  )}
                 </button>
               </div>
             </div>
@@ -897,13 +976,13 @@ export default function TenantPortal() {
         )}
 
         {/* ── Other modules ─────────────────────────────────────────────────── */}
-        {module !== 'miembros' && (
+        {module !== 'miembros' && module !== 'configuracion' && (
           <main style={{ ...s.main, alignItems: 'center', justifyContent: 'center', display: 'flex' }}>
             <div style={s.placeholder}>
-              <div style={{ ...s.placeholderIcon, background: currentMod.color }}>
-                {currentMod.icon}
+              <div style={{ ...s.placeholderIcon, background: currentMod?.color ?? C.muted }}>
+                {currentMod?.icon}
               </div>
-              <h2 style={s.placeholderTitle}>{currentMod.label}</h2>
+              <h2 style={s.placeholderTitle}>{currentMod?.label}</h2>
               <p style={s.placeholderSub}>Este módulo estará disponible próximamente.<br/>Estamos construyendo algo increíble para tu iglesia.</p>
               <span style={s.comingBadge}>Próximamente</span>
             </div>
@@ -916,7 +995,7 @@ export default function TenantPortal() {
 
             {/* Breadcrumb */}
             <div>
-              <button style={s.backBtn} onClick={() => setSelectedMember(null)}>
+              <button style={s.backBtn} onClick={() => { setSelectedMember(null); setIsEditingMember(false); setEditTarget(null); setEditErr(null) }}>
                 <svg viewBox="0 0 20 20" fill="currentColor" width={13} height={13}>
                   <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd"/>
                 </svg>
@@ -931,17 +1010,19 @@ export default function TenantPortal() {
                 <p style={s.mainSub}>{selectedMember.email}</p>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                {selectedMember.orgRole !== 'member' && (
+                {!isEditingMember && selectedMember.orgRole !== 'member' && (
                   <span style={{ ...s.orgRoleTag, ...(selectedMember.orgRole === 'admin' ? s.orgRoleAdmin : s.orgRoleLeader) }}>
                     {selectedMember.orgRole === 'admin' ? 'Admin org' : 'Líder'}
                   </span>
                 )}
-                <span style={{ ...s.statusTag, ...(selectedMember.status === 'active' ? s.statusActive : s.statusInactive) }}>
-                  {selectedMember.status === 'active' ? 'Activo' : 'Inactivo'}
-                </span>
-                {canEdit && (
+                {!isEditingMember && (
+                  <span style={{ ...s.statusTag, ...(selectedMember.status === 'active' ? s.statusActive : s.statusInactive) }}>
+                    {selectedMember.status === 'active' ? 'Activo' : 'Inactivo'}
+                  </span>
+                )}
+                {canEdit && !isEditingMember && (
                   <>
-                    <button style={s.btnGhost} onClick={() => { openEdit(selectedMember); setSelectedMember(null) }}>
+                    <button style={s.btnGhost} onClick={() => { openEdit(selectedMember); setIsEditingMember(true) }}>
                       <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14}><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>
                       Editar
                     </button>
@@ -949,6 +1030,17 @@ export default function TenantPortal() {
                       onClick={() => { setDeleteTarget(selectedMember); setSelectedMember(null) }}>
                       <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14}><path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd"/></svg>
                       Eliminar
+                    </button>
+                  </>
+                )}
+                {isEditingMember && (
+                  <>
+                    <button style={s.btnGhost} onClick={() => { setIsEditingMember(false); setEditTarget(null); setEditErr(null) }}>
+                      Cancelar
+                    </button>
+                    <button style={s.btnPrimary} onClick={() => saveEditMember()}>
+                      <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14}><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
+                      Guardar cambios
                     </button>
                   </>
                 )}
@@ -980,83 +1072,529 @@ export default function TenantPortal() {
               {/* Right: info cards */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-                {/* Main info */}
+                {editErr && isEditingMember && (
+                  <div style={s.formErr}>{editErr}</div>
+                )}
+
+                {/* Información del miembro */}
                 <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, overflow: 'hidden' }}>
                   <div style={{ padding: '14px 20px 12px', borderBottom: `1px solid ${C.border}` }}>
                     <div style={{ fontSize: 10, fontWeight: 700, color: C.light, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>PERFIL</div>
                     <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Información del miembro</div>
                   </div>
-                  {[
-                    { label: 'Nombre completo', value: selectedMember.name },
-                    { label: 'Email',            value: selectedMember.email },
-                    { label: 'Teléfono',         value: selectedMember.phone || '—' },
-                    { label: 'Ministerio',        value: selectedMember.ministry },
-                    { label: 'Alta',              value: selectedMember.joined },
-                  ].map(row => (
-                    <div key={row.label} style={{ display: 'flex', alignItems: 'center', padding: '11px 20px', borderBottom: `1px solid ${C.soft}` }}>
-                      <div style={{ width: 200, fontSize: 13, color: C.muted, flexShrink: 0 }}>{row.label}</div>
-                      <div style={{ flex: 1, fontSize: 13, color: C.text, fontWeight: 500 }}>{row.value}</div>
+                  {isEditingMember ? (
+                    <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+                      <div style={{ display: 'flex', gap: 10 }}>
+                        <div style={{ flex: '0 0 110px' }}>
+                          <label style={s.formLabel}>Prefijo</label>
+                          <SelectField value={editForm.prefix} onChange={e => setEditForm(f => ({ ...f, prefix: e.target.value }))}>
+                            <option value="">—</option>
+                            {['Sr.', 'Sra.', 'Rvdo.', 'Rvda.', 'Dr.', 'Dra.'].map(p => <option key={p} value={p}>{p}</option>)}
+                          </SelectField>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <label style={s.formLabel}>Nombre *</label>
+                          <input style={s.formInput} value={editForm.firstName} onChange={e => setEditForm(f => ({ ...f, firstName: e.target.value }))} placeholder="Nombre" />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <label style={s.formLabel}>Apellido *</label>
+                          <input style={s.formInput} value={editForm.lastName} onChange={e => setEditForm(f => ({ ...f, lastName: e.target.value }))} placeholder="Apellido" />
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 10 }}>
+                        <div style={{ flex: 1 }}>
+                          <label style={s.formLabel}>Correo electrónico *</label>
+                          <input style={s.formInput} type="email" value={editForm.email} onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))} placeholder="correo@ejemplo.com" />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <label style={s.formLabel}>Teléfono</label>
+                          <input style={s.formInput} type="tel" value={editForm.phone} onChange={e => setEditForm(f => ({ ...f, phone: e.target.value }))} placeholder="+34 600 000 000" />
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 10 }}>
+                        <div style={{ flex: 1 }}>
+                          <label style={s.formLabel}>Ministerio</label>
+                          <SelectField value={editForm.ministry} onChange={e => setEditForm(f => ({ ...f, ministry: e.target.value }))}>
+                            <option value="">Seleccionar…</option>
+                            {effectiveMinistries.map(m => <option key={m} value={m}>{m}</option>)}
+                          </SelectField>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <label style={s.formLabel}>Rol en la org.</label>
+                          <SelectField value={editForm.orgRole} onChange={e => setEditForm(f => ({ ...f, orgRole: e.target.value as 'admin' | 'leader' | 'member' }))}>
+                            <option value="member">Miembro</option>
+                            <option value="leader">Líder</option>
+                            <option value="admin">Admin</option>
+                          </SelectField>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <label style={s.formLabel}>Estado</label>
+                          <SelectField value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value as 'active' | 'inactive' }))}>
+                            <option value="active">Activo</option>
+                            <option value="inactive">Inactivo</option>
+                          </SelectField>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 10 }}>
+                        <div style={{ flex: 1 }}>
+                          <label style={s.formLabel}>Género</label>
+                          <SelectField value={editForm.gender} onChange={e => setEditForm(f => ({ ...f, gender: e.target.value }))}>
+                            <option value="">—</option>
+                            <option value="M">Masculino</option>
+                            <option value="F">Femenino</option>
+                          </SelectField>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <label style={s.formLabel}>Fecha de nacimiento</label>
+                          <input style={s.formInput} type="date" value={editForm.birthdate} onChange={e => setEditForm(f => ({ ...f, birthdate: e.target.value }))} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <label style={s.formLabel}>Aniversario de boda</label>
+                          <input style={s.formInput} type="date" value={editForm.anniversary} onChange={e => setEditForm(f => ({ ...f, anniversary: e.target.value }))} />
+                        </div>
+                      </div>
                     </div>
-                  ))}
-                  <div style={{ display: 'flex', alignItems: 'center', padding: '11px 20px', borderBottom: `1px solid ${C.soft}` }}>
-                    <div style={{ width: 200, fontSize: 13, color: C.muted, flexShrink: 0 }}>Rol</div>
-                    <div style={{ flex: 1 }}>
-                      {selectedMember.orgRole === 'member'
-                        ? <span style={{ fontSize: 13, color: C.muted }}>Miembro</span>
-                        : <span style={{ ...s.orgRoleTag, ...(selectedMember.orgRole === 'admin' ? s.orgRoleAdmin : s.orgRoleLeader) }}>
-                            {selectedMember.orgRole === 'admin' ? 'Admin org' : 'Líder'}
-                          </span>
-                      }
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', padding: '11px 20px' }}>
-                    <div style={{ width: 200, fontSize: 13, color: C.muted, flexShrink: 0 }}>Estado</div>
-                    <div style={{ flex: 1 }}>
-                      <span style={{ ...s.statusTag, ...(selectedMember.status === 'active' ? s.statusActive : s.statusInactive) }}>
-                        {selectedMember.status === 'active' ? 'Activo' : 'Inactivo'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Personal data */}
-                {(selectedMember.gender || selectedMember.birthdate || selectedMember.anniversary) && (
-                  <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, overflow: 'hidden' }}>
-                    <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.border}`, fontSize: 15, fontWeight: 700, color: C.text }}>Datos personales</div>
-                    {selectedMember.gender && (
+                  ) : (
+                    <>
+                      {[
+                        { label: 'Prefijo',         value: selectedMember.prefix || '—' },
+                        { label: 'Nombre completo', value: selectedMember.name },
+                        { label: 'Email',           value: selectedMember.email },
+                        { label: 'Teléfono',        value: selectedMember.phone || '—' },
+                        { label: 'Ministerio',      value: selectedMember.ministry || '—' },
+                        { label: 'Alta',            value: selectedMember.joined },
+                      ].map(row => (
+                        <div key={row.label} style={{ display: 'flex', alignItems: 'center', padding: '11px 20px', borderBottom: `1px solid ${C.soft}` }}>
+                          <div style={{ width: 200, fontSize: 13, color: C.muted, flexShrink: 0 }}>{row.label}</div>
+                          <div style={{ flex: 1, fontSize: 13, color: C.text, fontWeight: 500 }}>{row.value}</div>
+                        </div>
+                      ))}
+                      <div style={{ display: 'flex', alignItems: 'center', padding: '11px 20px', borderBottom: `1px solid ${C.soft}` }}>
+                        <div style={{ width: 200, fontSize: 13, color: C.muted, flexShrink: 0 }}>Rol</div>
+                        <div style={{ flex: 1 }}>
+                          {selectedMember.orgRole === 'member'
+                            ? <span style={{ fontSize: 13, color: C.muted }}>Miembro</span>
+                            : <span style={{ ...s.orgRoleTag, ...(selectedMember.orgRole === 'admin' ? s.orgRoleAdmin : s.orgRoleLeader) }}>
+                                {selectedMember.orgRole === 'admin' ? 'Admin org' : 'Líder'}
+                              </span>
+                          }
+                        </div>
+                      </div>
                       <div style={{ display: 'flex', alignItems: 'center', padding: '11px 20px', borderBottom: `1px solid ${C.soft}` }}>
                         <div style={{ width: 200, fontSize: 13, color: C.muted, flexShrink: 0 }}>Género</div>
-                        <div style={{ flex: 1, fontSize: 13, color: C.text, fontWeight: 500 }}>{selectedMember.gender === 'M' ? 'Masculino' : 'Femenino'}</div>
+                        <div style={{ flex: 1, fontSize: 13, color: C.text, fontWeight: 500 }}>
+                          {selectedMember.gender ? (selectedMember.gender === 'M' ? 'Masculino' : 'Femenino') : '—'}
+                        </div>
                       </div>
-                    )}
-                    {selectedMember.birthdate && (
                       <div style={{ display: 'flex', alignItems: 'center', padding: '11px 20px', borderBottom: `1px solid ${C.soft}` }}>
                         <div style={{ width: 200, fontSize: 13, color: C.muted, flexShrink: 0 }}>Fecha de nacimiento</div>
-                        <div style={{ flex: 1, fontSize: 13, color: C.text, fontWeight: 500 }}>{selectedMember.birthdate}</div>
+                        <div style={{ flex: 1, fontSize: 13, color: C.text, fontWeight: 500 }}>{selectedMember.birthdate || '—'}</div>
                       </div>
-                    )}
-                    {selectedMember.anniversary && (
-                      <div style={{ display: 'flex', alignItems: 'center', padding: '11px 20px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', padding: '11px 20px', borderBottom: `1px solid ${C.soft}` }}>
                         <div style={{ width: 200, fontSize: 13, color: C.muted, flexShrink: 0 }}>Aniversario de boda</div>
-                        <div style={{ flex: 1, fontSize: 13, color: C.text, fontWeight: 500 }}>{selectedMember.anniversary}</div>
+                        <div style={{ flex: 1, fontSize: 13, color: C.text, fontWeight: 500 }}>{selectedMember.anniversary || '—'}</div>
                       </div>
-                    )}
-                  </div>
-                )}
+                      <div style={{ display: 'flex', alignItems: 'center', padding: '11px 20px' }}>
+                        <div style={{ width: 200, fontSize: 13, color: C.muted, flexShrink: 0 }}>Estado</div>
+                        <div style={{ flex: 1 }}>
+                          <span style={{ ...s.statusTag, ...(selectedMember.status === 'active' ? s.statusActive : s.statusInactive) }}>
+                            {selectedMember.status === 'active' ? 'Activo' : 'Inactivo'}
+                          </span>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
 
-                {/* Roles */}
-                {selectedMember.roles.length > 0 && (
-                  <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, overflow: 'hidden' }}>
-                    <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.border}`, fontSize: 15, fontWeight: 700, color: C.text }}>Roles en el ministerio</div>
-                    <div style={{ padding: '14px 20px', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                      {selectedMember.roles.map(r => <span key={r} style={s.roleTag}>{r}</span>)}
+                {/* Roles en el ministerio */}
+                <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, overflow: 'hidden' }}>
+                  <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.border}`, fontSize: 15, fontWeight: 700, color: C.text }}>Roles en el ministerio</div>
+                  {isEditingMember ? (
+                    <div style={{ padding: '14px 20px' }}>
+                      <div style={s.rolesGrid}>
+                        {effectiveRoles.map(role => (
+                          <button key={role} type="button"
+                            style={{ ...s.roleChip, ...(editForm.roles.includes(role) ? s.roleChipActive : {}) }}
+                            onClick={() => toggleRole(role, editForm, setEditForm)}>
+                            {editForm.roles.includes(role) && (
+                              <svg viewBox="0 0 20 20" fill="currentColor" width={11} height={11} style={{ flexShrink: 0 }}>
+                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/>
+                              </svg>
+                            )}
+                            {role}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  ) : (
+                    <div style={{ padding: '14px 20px', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {selectedMember.roles.length > 0
+                        ? selectedMember.roles.map(r => <span key={r} style={s.roleTag}>{r}</span>)
+                        : <span style={{ fontSize: 13, color: C.light }}>Sin roles asignados</span>
+                      }
+                    </div>
+                  )}
+                </div>
 
               </div>
             </div>
           </main>
+        )}
+
+        {/* ── Configuración ─────────────────────────────────────────────────── */}
+        {module === 'configuracion' && (
+          <>
+            {/* Settings sidebar */}
+            <aside style={s.sidebar}>
+              <div style={s.sidebarHead}>
+                <span style={{ ...s.sidebarModIcon, background: '#64748B' }}>
+                  <svg viewBox="0 0 20 20" fill="currentColor" width={13} height={13}><path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd"/></svg>
+                </span>
+                <span style={s.sidebarHeadText}>Configuración</span>
+              </div>
+              <nav style={s.sidebarNav}>
+                <p style={s.sidebarSection}>Cuenta</p>
+                {([
+                  { id: 'general',      label: 'General' },
+                  { id: 'ministerios',  label: 'Ministerios' },
+                  { id: 'roles',        label: 'Roles' },
+                ] as { id: SettingsTab; label: string }[]).map(item => (
+                  <button key={item.id}
+                    style={{ ...s.sidebarItem, ...(settingsTab === item.id ? s.sidebarItemActive : {}) }}
+                    onClick={() => { setSettingsTab(item.id); setSNewItem('') }}
+                    onMouseEnter={e => { if (settingsTab !== item.id) e.currentTarget.style.background = C.soft }}
+                    onMouseLeave={e => { if (settingsTab !== item.id) e.currentTarget.style.background = 'transparent' }}>
+                    <span style={{ flex: 1, textAlign: 'left' }}>{item.label}</span>
+                  </button>
+                ))}
+                <p style={{ ...s.sidebarSection, marginTop: 20 }}>Acceso</p>
+                {([{ id: 'admins', label: 'Administradores' }] as { id: SettingsTab; label: string }[]).map(item => (
+                  <button key={item.id}
+                    style={{ ...s.sidebarItem, ...(settingsTab === item.id ? s.sidebarItemActive : {}) }}
+                    onClick={() => { setSettingsTab(item.id); setSNewItem('') }}
+                    onMouseEnter={e => { if (settingsTab !== item.id) e.currentTarget.style.background = C.soft }}
+                    onMouseLeave={e => { if (settingsTab !== item.id) e.currentTarget.style.background = 'transparent' }}>
+                    <span style={{ flex: 1, textAlign: 'left' }}>{item.label}</span>
+                  </button>
+                ))}
+                <p style={{ ...s.sidebarSection, marginTop: 20 }}>Plataforma</p>
+                {([
+                  { id: 'integraciones', label: 'Integraciones' },
+                  { id: 'facturacion',   label: 'Facturación' },
+                ] as { id: SettingsTab; label: string }[]).map(item => (
+                  <button key={item.id}
+                    style={{ ...s.sidebarItem, ...(settingsTab === item.id ? s.sidebarItemActive : {}) }}
+                    onClick={() => { setSettingsTab(item.id); setSNewItem('') }}
+                    onMouseEnter={e => { if (settingsTab !== item.id) e.currentTarget.style.background = C.soft }}
+                    onMouseLeave={e => { if (settingsTab !== item.id) e.currentTarget.style.background = 'transparent' }}>
+                    <span style={{ flex: 1, textAlign: 'left' }}>{item.label}</span>
+                  </button>
+                ))}
+              </nav>
+            </aside>
+
+            {/* Settings main content */}
+            <main style={{ ...s.main, gap: 20, maxWidth: 720 }}>
+
+              {/* ── General ───────────────────────────────────────────────── */}
+              {settingsTab === 'general' && (
+                <>
+                  <div>
+                    <h1 style={s.mainTitle}>General</h1>
+                    <p style={s.mainSub}>Identidad y datos de tu organización</p>
+                  </div>
+
+                  {/* Icon */}
+                  <div style={s.settingsCard}>
+                    <div style={s.settingsCardTitle}>Icono de la organización</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '16px 20px' }}>
+                      <div style={{ width: 72, height: 72, borderRadius: 18, background: sIcon ? 'transparent' : C.primary, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: `2px solid ${C.border}` }}>
+                        {sIcon
+                          ? <img src={sIcon} alt="icono" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          : <span style={{ color: '#fff', fontSize: 26, fontWeight: 700 }}>{org?.name?.[0]?.toUpperCase()}</span>
+                        }
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <input ref={iconInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleIconUpload} />
+                        <button style={s.btnGhost} onClick={() => iconInputRef.current?.click()}>Cambiar icono</button>
+                        {sIcon && <button style={{ ...s.btnGhost, color: C.danger, borderColor: 'rgba(239,68,68,.3)' }} onClick={() => setSIcon(null)}>Eliminar</button>}
+                      </div>
+                    </div>
+                    <div style={{ padding: '0 20px 16px', fontSize: 12, color: C.light }}>PNG, JPG o GIF · máx. 300 KB</div>
+                  </div>
+
+                  {/* Name + alias */}
+                  <div style={s.settingsCard}>
+                    <div style={s.settingsCardTitle}>Datos de la organización</div>
+                    <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                        <label style={s.formLabel}>Nombre de la organización</label>
+                        <input style={s.formInput} value={sName} onChange={e => setSName(e.target.value)} placeholder="Mi Iglesia" />
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                        <label style={s.formLabel}>Alias / URL</label>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 0, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden', background: C.surface }}>
+                          <span style={{ padding: '8px 10px', fontSize: 13, color: C.light, background: C.soft, flexShrink: 0, borderRight: `1px solid ${C.border}` }}>worsyn.app/</span>
+                          <input style={{ ...s.formInput, border: 'none', borderRadius: 0, flex: 1 }} value={sAlias} onChange={e => setSAlias(e.target.value)} placeholder="mi-iglesia" />
+                        </div>
+                        <span style={{ fontSize: 11, color: C.light }}>Solo letras minúsculas, números y guiones</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {sErr && <div style={s.formErr}>{sErr}</div>}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    {canEdit && (
+                      <button style={{ ...s.btnPrimary, ...(sSaving ? { opacity: 0.65, cursor: 'not-allowed' } : {}) }}
+                        disabled={sSaving}
+                        onClick={() => saveSettings({ name: sName.trim(), alias: sAlias.trim() || null, icon: sIcon })}>
+                        {sSaving ? 'Guardando…' : 'Guardar cambios'}
+                      </button>
+                    )}
+                    {sSaved && <span style={{ fontSize: 13, color: C.success, display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14}><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
+                      Guardado
+                    </span>}
+                  </div>
+                </>
+              )}
+
+              {/* ── Ministerios ───────────────────────────────────────────── */}
+              {settingsTab === 'ministerios' && (
+                <>
+                  <div>
+                    <h1 style={s.mainTitle}>Ministerios</h1>
+                    <p style={s.mainSub}>Personaliza los ministerios disponibles en tu organización</p>
+                  </div>
+                  <div style={s.settingsCard}>
+                    <div style={s.settingsCardTitle}>Ministerios activos · {sMins.length}</div>
+                    <div style={{ padding: '16px 20px', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {sMins.map(m => (
+                        <div key={m} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 8, padding: '5px 10px 5px 12px', fontSize: 13, color: C.primary, fontWeight: 500 }}>
+                          {m}
+                          <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#818CF8', lineHeight: 1, padding: '0 2px', borderRadius: 4 }}
+                            onClick={() => setSMins(prev => prev.filter(x => x !== m))}
+                            title="Eliminar">
+                            <svg viewBox="0 0 20 20" fill="currentColor" width={12} height={12}><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd"/></svg>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ padding: '0 20px 16px', display: 'flex', gap: 8 }}>
+                      <input style={{ ...s.formInput, flex: 1 }} value={sNewItem} onChange={e => setSNewItem(e.target.value)}
+                        placeholder="Nuevo ministerio…"
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && sNewItem.trim() && !sMins.includes(sNewItem.trim())) {
+                            setSMins(prev => [...prev, sNewItem.trim()]); setSNewItem('')
+                          }
+                        }} />
+                      <button style={s.btnPrimary} onClick={() => {
+                        const v = sNewItem.trim()
+                        if (v && !sMins.includes(v)) { setSMins(prev => [...prev, v]); setSNewItem('') }
+                      }}>Agregar</button>
+                    </div>
+                  </div>
+                  {sErr && <div style={s.formErr}>{sErr}</div>}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    {canEdit && (
+                      <button style={{ ...s.btnPrimary, ...(sSaving ? { opacity: 0.65, cursor: 'not-allowed' } : {}) }}
+                        disabled={sSaving}
+                        onClick={() => saveSettings({ ministries: sMins })}>
+                        {sSaving ? 'Guardando…' : 'Guardar cambios'}
+                      </button>
+                    )}
+                    {sSaved && <span style={{ fontSize: 13, color: C.success, display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14}><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
+                      Guardado
+                    </span>}
+                  </div>
+                </>
+              )}
+
+              {/* ── Roles ─────────────────────────────────────────────────── */}
+              {settingsTab === 'roles' && (
+                <>
+                  <div>
+                    <h1 style={s.mainTitle}>Roles</h1>
+                    <p style={s.mainSub}>Roles que pueden desempeñar los miembros (músico, técnico, etc.)</p>
+                  </div>
+                  <div style={s.settingsCard}>
+                    <div style={s.settingsCardTitle}>Roles activos · {sRoles.length}</div>
+                    <div style={{ padding: '16px 20px', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {sRoles.map(r => (
+                        <div key={r} style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.soft, border: `1px solid ${C.border}`, borderRadius: 8, padding: '5px 10px 5px 12px', fontSize: 13, color: C.muted, fontWeight: 500 }}>
+                          {r}
+                          <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.light, lineHeight: 1, padding: '0 2px', borderRadius: 4 }}
+                            onClick={() => setSRoles(prev => prev.filter(x => x !== r))}
+                            title="Eliminar">
+                            <svg viewBox="0 0 20 20" fill="currentColor" width={12} height={12}><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd"/></svg>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ padding: '0 20px 16px', display: 'flex', gap: 8 }}>
+                      <input style={{ ...s.formInput, flex: 1 }} value={sNewItem} onChange={e => setSNewItem(e.target.value)}
+                        placeholder="Nuevo rol…"
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && sNewItem.trim() && !sRoles.includes(sNewItem.trim())) {
+                            setSRoles(prev => [...prev, sNewItem.trim()]); setSNewItem('')
+                          }
+                        }} />
+                      <button style={s.btnPrimary} onClick={() => {
+                        const v = sNewItem.trim()
+                        if (v && !sRoles.includes(v)) { setSRoles(prev => [...prev, v]); setSNewItem('') }
+                      }}>Agregar</button>
+                    </div>
+                  </div>
+                  {sErr && <div style={s.formErr}>{sErr}</div>}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    {canEdit && (
+                      <button style={{ ...s.btnPrimary, ...(sSaving ? { opacity: 0.65, cursor: 'not-allowed' } : {}) }}
+                        disabled={sSaving}
+                        onClick={() => saveSettings({ member_roles: sRoles })}>
+                        {sSaving ? 'Guardando…' : 'Guardar cambios'}
+                      </button>
+                    )}
+                    {sSaved && <span style={{ fontSize: 13, color: C.success, display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14}><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
+                      Guardado
+                    </span>}
+                  </div>
+                </>
+              )}
+
+              {/* ── Administradores ───────────────────────────────────────── */}
+              {settingsTab === 'admins' && (
+                <>
+                  <div>
+                    <h1 style={s.mainTitle}>Administradores</h1>
+                    <p style={s.mainSub}>Gestiona el acceso de administradores y la seguridad</p>
+                  </div>
+
+                  {/* 2FA toggle */}
+                  <div style={s.settingsCard}>
+                    <div style={s.settingsCardTitle}>Autenticación de dos factores</div>
+                    <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Requerir 2FA para administradores</div>
+                        <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>Los admins deberán activar 2FA para acceder al portal</div>
+                      </div>
+                      <button
+                        style={{ width: 44, height: 24, borderRadius: 12, border: 'none', cursor: canEdit ? 'pointer' : 'default', background: sRequire2FA ? C.primary : C.border, position: 'relative', transition: 'background 200ms', flexShrink: 0 }}
+                        onClick={() => canEdit && setSRequire2FA(v => !v)}>
+                        <span style={{ position: 'absolute', top: 3, left: sRequire2FA ? 23 : 3, width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left 200ms', boxShadow: '0 1px 3px rgba(0,0,0,.2)' }} />
+                      </button>
+                    </div>
+                    {sErr && <div style={{ ...s.formErr, margin: '0 20px 16px' }}>{sErr}</div>}
+                    {canEdit && (
+                      <div style={{ padding: '0 20px 16px', display: 'flex', gap: 12, alignItems: 'center' }}>
+                        <button style={{ ...s.btnPrimary, ...(sSaving ? { opacity: 0.65 } : {}) }} disabled={sSaving}
+                          onClick={() => saveSettings({ require_2fa_admins: sRequire2FA })}>
+                          {sSaving ? 'Guardando…' : 'Guardar'}
+                        </button>
+                        {sSaved && <span style={{ fontSize: 13, color: C.success }}>✓ Guardado</span>}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Admin list */}
+                  <div style={s.settingsCard}>
+                    <div style={s.settingsCardTitle}>Administradores y líderes · {members.filter(m => m.orgRole !== 'member').length}</div>
+                    {members.filter(m => m.orgRole !== 'member').length === 0 ? (
+                      <div style={{ padding: '24px 20px', fontSize: 13, color: C.light, textAlign: 'center' }}>No hay administradores ni líderes</div>
+                    ) : (
+                      members.filter(m => m.orgRole !== 'member').map(m => (
+                        <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 20px', borderBottom: `1px solid ${C.soft}` }}>
+                          <div style={{ ...s.avatar, background: m.color }}>{m.initials}</div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{m.name}</div>
+                            <div style={{ fontSize: 11, color: C.light }}>{m.email}</div>
+                          </div>
+                          <span style={{ ...s.orgRoleTag, ...(m.orgRole === 'admin' ? s.orgRoleAdmin : s.orgRoleLeader) }}>
+                            {m.orgRole === 'admin' ? 'Admin org' : 'Líder'}
+                          </span>
+                          <span style={{ fontSize: 11, fontWeight: 600, background: '#F1F5F9', color: '#94A3B8', borderRadius: 999, padding: '2px 9px' }}>2FA: No activado</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </>
+              )}
+
+              {/* ── Integraciones ─────────────────────────────────────────── */}
+              {settingsTab === 'integraciones' && (
+                <>
+                  <div>
+                    <h1 style={s.mainTitle}>Integraciones</h1>
+                    <p style={s.mainSub}>Conecta tu organización con otras plataformas</p>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 14 }}>
+                    {[
+                      { name: 'Planning Center', desc: 'Sincroniza personas, servicios y grupos', icon: '📋', color: '#3B82F6' },
+                      { name: 'WhatsApp Business', desc: 'Envía notificaciones y recordatorios', icon: '💬', color: '#25D366' },
+                      { name: 'Google Calendar', desc: 'Sincroniza eventos y ensayos', icon: '📅', color: '#EA4335' },
+                      { name: 'Slack', desc: 'Notificaciones en tiempo real al equipo', icon: '⚡', color: '#4A154B' },
+                      { name: 'Stripe', desc: 'Gestión de pagos y donaciones', icon: '💳', color: '#635BFF' },
+                      { name: 'Mailchimp', desc: 'Email marketing para comunicaciones', icon: '✉', color: '#FFE01B' },
+                    ].map(int => (
+                      <div key={int.name} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ width: 38, height: 38, borderRadius: 10, background: int.color + '18', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{int.icon}</div>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{int.name}</div>
+                        </div>
+                        <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.5 }}>{int.desc}</div>
+                        <span style={s.comingBadge}>Próximamente</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* ── Facturación ───────────────────────────────────────────── */}
+              {settingsTab === 'facturacion' && (
+                <>
+                  <div>
+                    <h1 style={s.mainTitle}>Facturación</h1>
+                    <p style={s.mainSub}>Plan, suscripción y métodos de pago</p>
+                  </div>
+                  {/* Current plan */}
+                  <div style={s.settingsCard}>
+                    <div style={s.settingsCardTitle}>Plan actual</div>
+                    <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: C.text, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{org?.plan ?? 'Free'}</div>
+                        <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>
+                          {org?.plan === 'free' ? 'Hasta 50 miembros · funciones básicas' :
+                           org?.plan === 'pro'  ? 'Miembros ilimitados · todas las funciones' :
+                           'Múltiples organizaciones · soporte prioritario'}
+                        </div>
+                      </div>
+                      <button style={{ ...s.btnGhost, pointerEvents: 'none', opacity: 0.6 }}>Cambiar plan</button>
+                    </div>
+                  </div>
+                  {/* Payment methods */}
+                  <div style={s.settingsCard}>
+                    <div style={s.settingsCardTitle}>Métodos de pago</div>
+                    <div style={{ padding: '24px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center' }}>
+                      <div style={{ width: 48, height: 48, borderRadius: 12, background: C.soft, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke={C.light} strokeWidth={1.5} width={24} height={24}>
+                          <rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>
+                        </svg>
+                      </div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Sin métodos de pago</div>
+                      <div style={{ fontSize: 13, color: C.muted }}>Agrega una tarjeta o cuenta bancaria para gestionar tu suscripción</div>
+                      <button style={{ ...s.btnPrimary, opacity: 0.6, pointerEvents: 'none', marginTop: 4 }}>
+                        <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14}><path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd"/></svg>
+                        Agregar método de pago
+                      </button>
+                      <span style={s.comingBadge}>Próximamente</span>
+                    </div>
+                  </div>
+                </>
+              )}
+
+            </main>
+          </>
         )}
       </div>
 
@@ -1071,11 +1609,13 @@ export default function TenantPortal() {
           onCancel={() => { setAddOpen(false); setForm(EMPTY_FORM); setFormErr(null) }}
           submitLabel="Guardar miembro"
           onToggleRole={role => toggleRole(role, form, setForm)}
+          ministries={effectiveMinistries}
+          predefinedRoles={effectiveRoles}
         />
       )}
 
       {/* ── Edit member modal ────────────────────────────────────────────────── */}
-      {editTarget && (
+      {editTarget && !isEditingMember && (
         <MemberModal
           title="Editar miembro"
           form={editForm}
@@ -1085,6 +1625,8 @@ export default function TenantPortal() {
           onCancel={() => { setEditTarget(null); setEditErr(null) }}
           submitLabel="Guardar cambios"
           onToggleRole={role => toggleRole(role, editForm, setEditForm)}
+          ministries={effectiveMinistries}
+          predefinedRoles={effectiveRoles}
         />
       )}
 
@@ -1144,7 +1686,7 @@ function DrawerRow({ icon, label, value }: { icon: string; label: string; value:
 
 // ── Member modal (shared add/edit) ────────────────────────────────────────────
 
-function MemberModal({ title, form, setForm, err, onSubmit, onCancel, submitLabel, onToggleRole }: {
+function MemberModal({ title, form, setForm, err, onSubmit, onCancel, submitLabel, onToggleRole, ministries, predefinedRoles }: {
   title: string
   form: MemberForm
   setForm: React.Dispatch<React.SetStateAction<MemberForm>>
@@ -1153,6 +1695,8 @@ function MemberModal({ title, form, setForm, err, onSubmit, onCancel, submitLabe
   onCancel: () => void
   submitLabel: string
   onToggleRole: (role: string) => void
+  ministries: string[]
+  predefinedRoles: string[]
 }) {
   return (
     <div style={s.overlay} onClick={e => { if (e.target === e.currentTarget) onCancel() }}>
@@ -1232,7 +1776,7 @@ function MemberModal({ title, form, setForm, err, onSubmit, onCancel, submitLabe
                 <label style={s.formLabel}>Ministerio</label>
                 <SelectField value={form.ministry} onChange={e => setForm(f => ({ ...f, ministry: e.target.value }))}>
                   <option value="">Seleccionar…</option>
-                  {MINISTRIES.map(m => <option key={m} value={m}>{m}</option>)}
+                  {ministries.map(m => <option key={m} value={m}>{m}</option>)}
                 </SelectField>
               </div>
               <div style={{ ...s.formField, flex: 1 }}>
@@ -1257,7 +1801,7 @@ function MemberModal({ title, form, setForm, err, onSubmit, onCancel, submitLabe
           <div style={s.formSection}>
             <div style={s.formSectionTitle}>Roles</div>
             <div style={s.rolesGrid}>
-              {PREDEFINED_ROLES.map(role => (
+              {predefinedRoles.map(role => (
                 <button key={role} type="button"
                   style={{ ...s.roleChip, ...(form.roles.includes(role) ? s.roleChipActive : {}) }}
                   onClick={() => onToggleRole(role)}>
@@ -1416,6 +1960,10 @@ const s: Record<string, React.CSSProperties> = {
   formInput: { border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 12px', fontSize: 13, color: C.text, outline: 'none', background: C.surface, width: '100%', boxSizing: 'border-box' },
   formSelect: { border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 32px 8px 12px', fontSize: 13, color: C.text, outline: 'none', background: C.surface, width: '100%', boxSizing: 'border-box', cursor: 'pointer', appearance: 'none', WebkitAppearance: 'none' } as React.CSSProperties,
   formErr:   { background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.25)', borderRadius: 8, color: C.danger, fontSize: 13, padding: '8px 14px' },
+
+  // Settings cards
+  settingsCard:      { background: '#FFFFFF', border: `1px solid #E2E8F0`, borderRadius: 14, overflow: 'hidden' },
+  settingsCardTitle: { padding: '14px 20px', borderBottom: `1px solid #E2E8F0`, fontSize: 11, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.08em' } as React.CSSProperties,
 
   // Role chips
   rolesGrid:      { display: 'flex', flexWrap: 'wrap', gap: 8 },
