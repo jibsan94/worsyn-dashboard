@@ -844,8 +844,9 @@ body {
   color: var(--t-muted); font-weight: 600; white-space: nowrap;
   border-bottom: 1px solid var(--border);
 }
-.su-table tbody tr { border-bottom: 1px solid var(--border-soft); }
+.su-table tbody tr { border-bottom: 1px solid var(--border-soft); transition: background-color 120ms; }
 .su-table tbody tr:last-child { border-bottom: none; }
+.su-table tbody tr:hover td { background: var(--bg-hover); }
 .su-table tbody td { padding: 10px 12px; }
 .su-cell-bold { font-weight: 600; color: var(--t-base); }
 .su-muted    { color: var(--t-muted); }

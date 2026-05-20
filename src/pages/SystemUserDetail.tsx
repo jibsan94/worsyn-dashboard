@@ -126,25 +126,6 @@ export default function SystemUserDetail() {
     }
   }
 
-  const handleToggleOwn2FA = async () => {
-    if (!user) return
-    setTwoFaState('resetting')
-    try {
-      const r = await fetch(`/api/v1/admin/users/${user.id}/2fa`, {
-        method: 'PUT',
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!r.ok) throw new Error()
-      const updated: AdminUser = await r.json()
-      setUser(updated)
-      show('success', updated.two_factor_enabled ? '2FA activado' : '2FA desactivado', updated.two_factor_enabled ? 'La autenticación en dos pasos está activa en tu cuenta.' : 'La autenticación en dos pasos ha sido desactivada.')
-    } catch {
-      show('danger', 'Error', 'No se pudo actualizar el estado del 2FA.')
-    } finally {
-      setTwoFaState('idle')
-    }
-  }
-
   const handleReset2FA = async () => {
     if (!user) return
     setConfirmReset2FA(false)
@@ -372,17 +353,15 @@ export default function SystemUserDetail() {
                 </span>
               </div>
 
-              {/* Self: toggle own 2FA */}
+              {/* Self: link to Profile for TOTP setup */}
               {canToggle2FA && (
                 <div style={{ marginBottom: 8 }}>
-                  <button className="btn btn--ghost btn--sm" onClick={handleToggleOwn2FA}
-                    disabled={twoFaState === 'resetting'}>
-                    {twoFaState === 'resetting'
-                      ? <><span className="spinner" /> Actualizando...</>
-                      : user.two_factor_enabled ? 'Desactivar mi 2FA' : 'Activar mi 2FA'
-                    }
+                  <p className="form-hint" style={{ marginBottom: 8 }}>
+                    Configura tu 2FA con Google Authenticator o 2FAS Auth desde tu perfil.
+                  </p>
+                  <button className="btn btn--ghost btn--sm" onClick={() => navigate('/profile')}>
+                    Ir a Mi Perfil →
                   </button>
-                  <div className="form-hint" style={{ marginTop: 4 }}>La configuración de apps TOTP se implementará en Fase 2.</div>
                 </div>
               )}
 

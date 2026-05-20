@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 type PwdState     = 'idle' | 'saving' | 'saved' | 'error'
 type ProfileState = 'idle' | 'saving' | 'saved' | 'error'
 type AvatarState  = 'idle' | 'saving' | 'saved' | 'error'
+type TwoFaPhase   = 'idle' | 'loading_qr' | 'qr_shown' | 'enabling' | 'disable_confirm' | 'disabling'
 
 const EyeOff = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
@@ -45,6 +46,13 @@ export default function Profile() {
   const [showNew,     setShowNew]     = useState(false)
   const [pwdState,    setPwdState]    = useState<PwdState>('idle')
   const [pwdError,    setPwdError]    = useState<string | null>(null)
+
+  // 2FA
+  const [twoFaPhase, setTwoFaPhase] = useState<TwoFaPhase>('idle')
+  const [qrCode,     setQrCode]     = useState<string | null>(null)
+  const [secret,     setSecret]     = useState<string | null>(null)
+  const [totpCode,   setTotpCode]   = useState('')
+  const [twoFaError, setTwoFaError] = useState<string | null>(null)
 
   const handleSaveProfile = async (e: FormEvent) => {
     e.preventDefault()
@@ -157,6 +165,86 @@ export default function Profile() {
     }
   }
 
+  // ── 2FA handlers ─────────────────────────────────────────────────────────────
+
+  const handleStart2FA = async () => {
+    setTwoFaPhase('loading_qr')
+    setTwoFaError(null)
+    try {
+      const r = await fetch('/api/v1/auth/2fa/setup', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!r.ok) throw new Error()
+      const data = await r.json()
+      setQrCode(data.qr_code)
+      setSecret(data.secret)
+      setTwoFaPhase('qr_shown')
+    } catch {
+      setTwoFaError('No se pudo generar el código QR. Inténtalo de nuevo.')
+      setTwoFaPhase('idle')
+    }
+  }
+
+  const handleEnable2FA = async () => {
+    setTwoFaPhase('enabling')
+    setTwoFaError(null)
+    try {
+      const r = await fetch('/api/v1/auth/2fa/enable', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ totp_code: totpCode }),
+      })
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) {
+        setTwoFaError(data.detail ?? 'Código incorrecto.')
+        setTwoFaPhase('qr_shown')
+        return
+      }
+      if (user) setSession(token!, { ...user, two_factor_enabled: true })
+      setTwoFaPhase('idle')
+      setTotpCode('')
+      setQrCode(null)
+      setSecret(null)
+    } catch {
+      setTwoFaError('Error al activar el 2FA.')
+      setTwoFaPhase('qr_shown')
+    }
+  }
+
+  const handleDisable2FA = async () => {
+    setTwoFaPhase('disabling')
+    setTwoFaError(null)
+    try {
+      const r = await fetch('/api/v1/auth/2fa/disable', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ totp_code: totpCode }),
+      })
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) {
+        setTwoFaError(data.detail ?? 'Código incorrecto.')
+        setTwoFaPhase('disable_confirm')
+        return
+      }
+      if (user) setSession(token!, { ...user, two_factor_enabled: false })
+      setTwoFaPhase('idle')
+      setTotpCode('')
+    } catch {
+      setTwoFaError('Error al desactivar el 2FA.')
+      setTwoFaPhase('disable_confirm')
+    }
+  }
+
+  const handleCancel2FA = () => {
+    setTwoFaPhase('idle')
+    setTotpCode('')
+    setQrCode(null)
+    setSecret(null)
+    setTwoFaError(null)
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+
   const initials = user
     ? (user.full_name
         ? user.full_name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
@@ -164,6 +252,7 @@ export default function Profile() {
     : '?'
 
   const avatarChanged = avatarPreview !== (user?.avatar ?? null)
+  const twoFaEnabled  = user?.two_factor_enabled ?? false
 
   return (
     <main className="content">
@@ -363,6 +452,168 @@ export default function Profile() {
               </button>
             </div>
           </form>
+        </section>
+
+        {/* ── Autenticación en dos pasos ────────────────────────────── */}
+        <section className="col-12 card">
+          <div className="card-head">
+            <div className="card-title-wrap">
+              <span className="eyebrow">2FA</span>
+              <h2 className="card-title">Autenticación en dos pasos</h2>
+            </div>
+            <span className={`tag ${twoFaEnabled ? 't-ok' : 't-free'}`}>
+              {twoFaEnabled ? 'Activo' : 'Inactivo'}
+            </span>
+          </div>
+
+          {/* Idle + disabled → show activate button */}
+          {twoFaPhase === 'idle' && !twoFaEnabled && (
+            <div>
+              <p style={{ color: 'var(--t-muted)', fontSize: 13, marginBottom: 16, maxWidth: 560 }}>
+                El 2FA añade una capa adicional de seguridad a tu cuenta. Necesitarás una app de
+                autenticación como <strong>Google Authenticator</strong> o <strong>2FAS Auth</strong> instalada en tu teléfono.
+              </p>
+              {twoFaError && <p className="su-form-error" style={{ marginBottom: 12 }}>{twoFaError}</p>}
+              <button className="btn btn--primary" onClick={handleStart2FA}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} width={16} height={16} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                </svg>
+                Activar 2FA
+              </button>
+            </div>
+          )}
+
+          {/* Fetching QR */}
+          {twoFaPhase === 'loading_qr' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--t-muted)', fontSize: 14 }}>
+              <span className="spinner" /> Generando código QR…
+            </div>
+          )}
+
+          {/* QR shown / enabling — same view, button disabled while enabling */}
+          {(twoFaPhase === 'qr_shown' || twoFaPhase === 'enabling') && qrCode && (
+            <div style={{ display: 'flex', gap: 40, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              <div>
+                <p className="form-hint" style={{ marginBottom: 12, lineHeight: 1.6 }}>
+                  <strong>1.</strong> Abre <strong>Google Authenticator</strong> o <strong>2FAS Auth</strong> en tu teléfono.<br/>
+                  <strong>2.</strong> Escanea el código QR con la app.<br/>
+                  <strong>3.</strong> Introduce el código de 6 dígitos generado.
+                </p>
+                <img
+                  src={`data:image/png;base64,${qrCode}`}
+                  alt="Código QR para 2FA"
+                  style={{ width: 180, height: 180, border: '1px solid var(--border)', borderRadius: 8, display: 'block' }}
+                />
+                {secret && (
+                  <div style={{ marginTop: 10 }}>
+                    <span className="form-hint">¿No puedes escanear? Usa el código manual:</span>
+                    <code style={{ display: 'block', fontSize: 11, letterSpacing: '0.12em', color: 'var(--accent)', marginTop: 4, wordBreak: 'break-all', maxWidth: 200 }}>
+                      {secret}
+                    </code>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ flex: 1, minWidth: 240 }}>
+                <div className="form-group" style={{ maxWidth: 240 }}>
+                  <label className="form-label" htmlFor="2fa-enable-code">Código de verificación</label>
+                  <input
+                    id="2fa-enable-code"
+                    className="form-input"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={6}
+                    placeholder="000000"
+                    value={totpCode}
+                    onChange={e => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    autoComplete="one-time-code"
+                    autoFocus
+                    disabled={twoFaPhase === 'enabling'}
+                    style={{ letterSpacing: '0.25em', fontSize: 20, textAlign: 'center' }}
+                  />
+                </div>
+                {twoFaError && <p className="su-form-error" style={{ marginBottom: 12 }}>{twoFaError}</p>}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    className="btn btn--primary"
+                    onClick={handleEnable2FA}
+                    disabled={totpCode.length !== 6 || twoFaPhase === 'enabling'}
+                  >
+                    {twoFaPhase === 'enabling'
+                      ? <><span className="spinner light" /> Verificando…</>
+                      : 'Activar 2FA'
+                    }
+                  </button>
+                  <button className="btn btn--ghost" onClick={handleCancel2FA} disabled={twoFaPhase === 'enabling'}>
+                    Cancelar
+                  </button>
+                </div>
+                <p className="form-hint" style={{ marginTop: 12 }}>
+                  El código QR caduca en 5 minutos. Si expira, haz clic en «Cancelar» e inicia el proceso de nuevo.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Idle + enabled → show deactivate option */}
+          {twoFaPhase === 'idle' && twoFaEnabled && (
+            <div>
+              <p style={{ color: 'var(--t-muted)', fontSize: 13, marginBottom: 16, maxWidth: 560 }}>
+                Tu cuenta está protegida con autenticación en dos pasos. Se te pedirá un código de tu app de autenticación en cada inicio de sesión.
+              </p>
+              <button className="btn btn--ghost" onClick={() => { setTwoFaPhase('disable_confirm'); setTwoFaError(null) }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} width={16} height={16} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                  <line x1="1" y1="1" x2="23" y2="23"/>
+                </svg>
+                Desactivar 2FA
+              </button>
+            </div>
+          )}
+
+          {/* Disable confirm / disabling — same view */}
+          {(twoFaPhase === 'disable_confirm' || twoFaPhase === 'disabling') && (
+            <div>
+              <p style={{ color: 'var(--t-muted)', fontSize: 13, marginBottom: 16, maxWidth: 480 }}>
+                Para desactivar el 2FA, introduce el código actual de tu app de autenticación como confirmación.
+              </p>
+              <div className="form-group" style={{ maxWidth: 240 }}>
+                <label className="form-label" htmlFor="2fa-disable-code">Código TOTP actual</label>
+                <input
+                  id="2fa-disable-code"
+                  className="form-input"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={6}
+                  placeholder="000000"
+                  value={totpCode}
+                  onChange={e => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  autoComplete="one-time-code"
+                  autoFocus
+                  disabled={twoFaPhase === 'disabling'}
+                  style={{ letterSpacing: '0.25em', fontSize: 20, textAlign: 'center' }}
+                />
+              </div>
+              {twoFaError && <p className="su-form-error" style={{ marginBottom: 12 }}>{twoFaError}</p>}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  className="btn btn--danger"
+                  onClick={handleDisable2FA}
+                  disabled={totpCode.length !== 6 || twoFaPhase === 'disabling'}
+                >
+                  {twoFaPhase === 'disabling'
+                    ? <><span className="spinner light" /> Desactivando…</>
+                    : 'Confirmar desactivación'
+                  }
+                </button>
+                <button className="btn btn--ghost" onClick={handleCancel2FA} disabled={twoFaPhase === 'disabling'}>
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
         </section>
 
       </div>

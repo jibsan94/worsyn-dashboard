@@ -11,7 +11,16 @@ interface SecurityConfig {
   session_access_token_minutes: number
   session_refresh_token_days: number
   max_sessions_per_user: number
-  require_2fa: boolean  // system-wide policy
+  require_2fa: boolean
+  // SSO / Active Directory
+  sso_enabled: boolean
+  sso_provider: string
+  sso_ad_server: string
+  sso_ad_base_dn: string
+  sso_ad_bind_dn: string
+  sso_ad_bind_password: string
+  sso_ad_domain: string
+  sso_ad_user_filter: string
   readonly: boolean
 }
 
@@ -25,6 +34,14 @@ const DEFAULTS: SecurityConfig = {
   session_refresh_token_days: 7,
   max_sessions_per_user: 0,
   require_2fa: false,
+  sso_enabled: false,
+  sso_provider: 'ldap',
+  sso_ad_server: '',
+  sso_ad_base_dn: '',
+  sso_ad_bind_dn: '',
+  sso_ad_bind_password: '',
+  sso_ad_domain: '',
+  sso_ad_user_filter: '(sAMAccountName={username})',
   readonly: false,
 }
 
@@ -64,6 +81,14 @@ export default function SettingsSecurity() {
           session_refresh_token_days: cfg.session_refresh_token_days,
           max_sessions_per_user: cfg.max_sessions_per_user,
           require_2fa: cfg.require_2fa,
+          sso_enabled: cfg.sso_enabled,
+          sso_provider: cfg.sso_provider,
+          sso_ad_server: cfg.sso_ad_server,
+          sso_ad_base_dn: cfg.sso_ad_base_dn,
+          sso_ad_bind_dn: cfg.sso_ad_bind_dn,
+          sso_ad_bind_password: cfg.sso_ad_bind_password,
+          sso_ad_domain: cfg.sso_ad_domain,
+          sso_ad_user_filter: cfg.sso_ad_user_filter,
         }),
       })
       if (!r.ok) throw new Error()
@@ -286,6 +311,141 @@ export default function SettingsSecurity() {
               <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
             </svg>
             <span>Cada usuario gestiona su propio 2FA desde su perfil o desde <strong>Usuarios del sistema → detalle de usuario</strong>. Solo un <strong>owner</strong> puede desactivar el 2FA de otro usuario.</span>
+          </div>
+        </section>
+
+        {/* SSO / ACTIVE DIRECTORY */}
+        <section className="col-12 card">
+          <div className="card-head">
+            <div className="card-title-wrap">
+              <span className="eyebrow">Autenticación corporativa</span>
+              <h2 className="card-title">SSO / Active Directory</h2>
+            </div>
+            <span className="tag t-warn">No implementado</span>
+          </div>
+
+          <div className="form-notice" style={{ marginBottom: 20 }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <span>
+              El inicio de sesión vía SSO/LDAP <strong>no está activo en esta versión</strong>.
+              Guarda la configuración ahora para tenerla lista cuando se implemente la integración.
+              Diseñado para <strong>Active Directory en Linux</strong> (OpenLDAP-compatible).
+            </span>
+          </div>
+
+          {/* SSO Enable toggle */}
+          <div className="form-group" style={{ maxWidth: 400, marginBottom: 24 }}>
+            <label className="form-label">Habilitar SSO con Active Directory</label>
+            <div className="form-toggle-wrap">
+              <button
+                type="button" role="switch" aria-checked={cfg.sso_enabled}
+                className={`form-toggle${cfg.sso_enabled ? ' on' : ''}`}
+                onClick={() => !readOnly && set('sso_enabled', !cfg.sso_enabled)}
+                disabled={readOnly || isLoading}
+              >
+                <span className="form-toggle-thumb" />
+              </button>
+              <span className="form-toggle-label">{cfg.sso_enabled ? 'Habilitado (pendiente de implementación)' : 'Deshabilitado'}</span>
+            </div>
+            <span className="form-hint">Cuando esté implementado, los usuarios podrán autenticarse con sus credenciales de dominio.</span>
+          </div>
+
+          <div className="form-section-label">Servidor LDAP / Active Directory</div>
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label" htmlFor="sso-server">URL del servidor</label>
+              <input
+                id="sso-server"
+                className="form-input"
+                type="text"
+                placeholder="ldap://dc.empresa.local:389"
+                value={cfg.sso_ad_server}
+                onChange={e => set('sso_ad_server', e.target.value)}
+                disabled={readOnly || isLoading}
+                autoComplete="off"
+              />
+              <span className="form-hint">ldap:// para conexión estándar · ldaps:// para conexión segura (puerto 636)</span>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="sso-domain">Dominio NetBIOS</label>
+              <input
+                id="sso-domain"
+                className="form-input"
+                type="text"
+                placeholder="EMPRESA"
+                value={cfg.sso_ad_domain}
+                onChange={e => set('sso_ad_domain', e.target.value)}
+                disabled={readOnly || isLoading}
+                autoComplete="off"
+              />
+              <span className="form-hint">Nombre corto del dominio Windows (ej: EMPRESA, no empresa.local)</span>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="sso-base-dn">Base DN</label>
+              <input
+                id="sso-base-dn"
+                className="form-input"
+                type="text"
+                placeholder="DC=empresa,DC=local"
+                value={cfg.sso_ad_base_dn}
+                onChange={e => set('sso_ad_base_dn', e.target.value)}
+                disabled={readOnly || isLoading}
+                autoComplete="off"
+              />
+              <span className="form-hint">Raíz del árbol LDAP donde buscar usuarios</span>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="sso-user-filter">Filtro de usuario</label>
+              <input
+                id="sso-user-filter"
+                className="form-input"
+                type="text"
+                placeholder="(sAMAccountName={username})"
+                value={cfg.sso_ad_user_filter}
+                onChange={e => set('sso_ad_user_filter', e.target.value)}
+                disabled={readOnly || isLoading}
+                autoComplete="off"
+              />
+              <span className="form-hint">{'{username}'} se reemplaza con el usuario introducido en el login</span>
+            </div>
+          </div>
+
+          <div className="form-section-label">Cuenta de servicio (bind)</div>
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label" htmlFor="sso-bind-dn">Bind DN</label>
+              <input
+                id="sso-bind-dn"
+                className="form-input"
+                type="text"
+                placeholder="CN=svc-worsyn,OU=Cuentas de Servicio,DC=empresa,DC=local"
+                value={cfg.sso_ad_bind_dn}
+                onChange={e => set('sso_ad_bind_dn', e.target.value)}
+                disabled={readOnly || isLoading}
+                autoComplete="off"
+              />
+              <span className="form-hint">DN completo de la cuenta de servicio para hacer bind al directorio</span>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="sso-bind-pwd">Contraseña de la cuenta de servicio</label>
+              <input
+                id="sso-bind-pwd"
+                className="form-input"
+                type="password"
+                placeholder={cfg.sso_ad_server ? '••••••••  (sin cambios si vacío)' : 'Contraseña'}
+                value={cfg.sso_ad_bind_password}
+                onChange={e => set('sso_ad_bind_password', e.target.value)}
+                disabled={readOnly || isLoading}
+                autoComplete="new-password"
+              />
+              <span className="form-hint">Déjalo vacío para no modificar la contraseña guardada</span>
+            </div>
           </div>
         </section>
 
