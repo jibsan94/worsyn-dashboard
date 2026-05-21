@@ -46,8 +46,29 @@ export default function OrganizationDetail() {
 
   const [tenantBusy, setTenantBusy]             = useState(false)
   const [confirmDestroy, setConfirmDestroy]     = useState(false)
+  const [impersonating, setImpersonating]       = useState(false)
 
   const canWrite = hasRole('admin', 'owner')
+
+  async function handleImpersonate(targetOrg: Org) {
+    setImpersonating(true)
+    try {
+      const res = await fetch(`/api/v1/organizations/${targetOrg.id}/impersonate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
+      })
+      if (!res.ok) {
+        alert('No se pudo iniciar la sesión de soporte')
+        return
+      }
+      window.open(`/portal/${targetOrg.slug}`, '_blank')
+    } catch {
+      alert('Error de conexión al iniciar soporte')
+    } finally {
+      setImpersonating(false)
+    }
+  }
 
   const fetchOrg = useCallback(async () => {
     if (!token || !id) return
@@ -153,9 +174,9 @@ export default function OrganizationDetail() {
         <div className="hero-actions">
           <span className={`tag ${statusClass[org.status] ?? ''}`} style={{ alignSelf: 'center', fontSize: 13 }}>{statusLabel[org.status] ?? org.status}</span>
           <span className={`tag ${planClass[org.plan] ?? ''}`} style={{ alignSelf: 'center', fontSize: 13 }}>{org.plan}</span>
-          <button className="btn btn--ghost" onClick={() => window.open(`/portal/${org.slug}`, '_blank')}>
+          <button className="btn btn--ghost" onClick={() => handleImpersonate(org)} disabled={impersonating}>
             <svg viewBox="0 0 24 24" style={{ width: 14, height: 14 }}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-            Ver portal
+            {impersonating ? 'Entrando…' : 'Ver portal (soporte)'}
           </button>
           {canWrite && !editing && (
             <button className="btn btn--ghost" onClick={() => { setEditForm(org); setEditing(true) }}>

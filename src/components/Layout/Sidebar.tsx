@@ -101,7 +101,7 @@ const settingsSubnav = [
   },
 ]
 
-export default function Sidebar() {
+export default function Sidebar({ open, onClose }: { open?: boolean; onClose?: () => void }) {
   const location = useLocation()
   const inSettings = location.pathname.startsWith('/settings')
   const [settingsOpen, setSettingsOpen] = useState(inSettings)
@@ -109,8 +109,10 @@ export default function Sidebar() {
 
   const isAdminOrOwner = user?.role === 'admin' || user?.role === 'owner'
 
+  function handleNav() { onClose?.() }
+
   return (
-    <aside className="d-sidebar">
+    <aside className={`d-sidebar${open ? ' is-open' : ''}`}>
       {/* Brand */}
       <div className="brand">
         <div className="brand-logo">
@@ -137,6 +139,7 @@ export default function Sidebar() {
             to={item.path}
             end={item.path === '/'}
             className={`nav-link${location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(item.path + '/')) ? ' is-active' : ''}`}
+            onClick={handleNav}
           >
             {item.icon}
             <span>{item.label}</span>
@@ -149,6 +152,7 @@ export default function Sidebar() {
             key={item.path}
             to={item.path}
             className={`nav-link${location.pathname === item.path ? ' is-active' : ''}`}
+            onClick={handleNav}
           >
             {item.icon}
             <span>{item.label}</span>
@@ -160,6 +164,7 @@ export default function Sidebar() {
           <NavLink
             to="/logs"
             className={`nav-link${location.pathname === '/logs' ? ' is-active' : ''}`}
+            onClick={handleNav}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
@@ -200,6 +205,7 @@ export default function Sidebar() {
                 key={item.path}
                 to={item.path}
                 className={`nav-sublink${location.pathname === item.path ? ' is-active' : ''}`}
+                onClick={handleNav}
               >
                 <span className="sublink-icon">{item.icon}</span>
                 {item.label}

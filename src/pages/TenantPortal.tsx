@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import React, { useEffect, useRef, useState } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import Servicios from '../tenant/pages/Servicios'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -8,8 +9,9 @@ interface OrgInfo {
   ministries: string[]; member_roles: string[]; icon: string | null; require_2fa_admins: boolean
 }
 type Screen       = 'loading' | 'not-found' | 'login' | 'app'
-type TModule      = 'principal' | 'servicios' | 'miembros' | 'equipos' | 'partituras' | 'eventos' | 'ensayos' | 'calendario' | 'finanzas' | 'configuracion'
-type MiembrosTab  = 'dashboard' | 'miembros' | 'flujos'
+type TModule      = 'principal' | 'servicios' | 'miembros' | 'equipos' | 'partituras' | 'eventos' | 'ensayos' | 'calendario' | 'finanzas' | 'configuracion' | 'perfil'
+type MiembrosTab   = 'dashboard' | 'miembros' | 'flujos' | 'formularios'
+type ServiciosTab  = 'mi-planificacion' | 'servicios' | 'canciones' | 'media' | 'personas'
 type MiembrosView = 'todas' | 'ministerio' | 'nuevos'
 type OrgRole      = 'admin' | 'lider' | 'miembro'
 type SettingsTab  = 'general' | 'ministerios' | 'roles' | 'admins' | 'integraciones' | 'facturacion'
@@ -19,7 +21,7 @@ interface Person {
   ministry: string; roles: string[]; phone: string; email: string
   status: 'active' | 'inactive'; joined: string
   prefix?: string; gender?: 'M' | 'F'; birthdate?: string; anniversary?: string
-  orgRole: 'admin' | 'leader' | 'member'
+  orgRole: 'admin' | 'leader' | 'member'; avatar?: string
 }
 
 interface ApiMember {
@@ -28,7 +30,7 @@ interface ApiMember {
   joined_at: string; updated_at: string
   prefix: string | null; gender: string | null
   birthdate: string | null; anniversary: string | null
-  ministry: string | null; org_roles: string[]
+  ministry: string | null; org_roles: string[]; avatar: string | null
 }
 
 interface MemberForm {
@@ -72,6 +74,45 @@ const PREDEFINED_ROLES = [
 const DEFAULT_MINISTRIES = ['Alabanza', 'Audio/Visual', 'Pastoral', 'Jóvenes', 'Niños']
 
 const AVATAR_COLORS = ['#6366f1','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#6d28d9']
+
+// ── Country phone data ────────────────────────────────────────────────────────
+function mkFlag(iso: string) {
+  return [...iso].map(c => String.fromCodePoint(0x1F1E6 + c.charCodeAt(0) - 65)).join('')
+}
+interface Country { iso: string; name: string; dial: string; flag: string }
+const COUNTRIES: Country[] = ([
+  ['ES','España','+34'],['MX','México','+52'],['CO','Colombia','+57'],
+  ['AR','Argentina','+54'],['PE','Perú','+51'],['VE','Venezuela','+58'],
+  ['CL','Chile','+56'],['EC','Ecuador','+593'],['BO','Bolivia','+591'],
+  ['CU','Cuba','+53'],['GT','Guatemala','+502'],['HN','Honduras','+504'],
+  ['SV','El Salvador','+503'],['NI','Nicaragua','+505'],['CR','Costa Rica','+506'],
+  ['PA','Panamá','+507'],['PY','Paraguay','+595'],['UY','Uruguay','+598'],
+  ['DO','Rep. Dominicana','+1809'],['PR','Puerto Rico','+1787'],
+  ['US','Estados Unidos','+1'],['CA','Canadá','+1'],['BR','Brasil','+55'],
+  ['GB','Reino Unido','+44'],['FR','Francia','+33'],['DE','Alemania','+49'],
+  ['IT','Italia','+39'],['PT','Portugal','+351'],['NL','Países Bajos','+31'],
+  ['BE','Bélgica','+32'],['CH','Suiza','+41'],['AT','Austria','+43'],
+  ['SE','Suecia','+46'],['NO','Noruega','+47'],['DK','Dinamarca','+45'],
+  ['FI','Finlandia','+358'],['PL','Polonia','+48'],['RO','Rumanía','+40'],
+  ['CZ','Rep. Checa','+420'],['HU','Hungría','+36'],['GR','Grecia','+30'],
+  ['AU','Australia','+61'],['JP','Japón','+81'],['CN','China','+86'],
+  ['IN','India','+91'],['RU','Rusia','+7'],['ZA','Sudáfrica','+27'],
+  ['NG','Nigeria','+234'],['KE','Kenia','+254'],['EG','Egipto','+20'],
+  ['MA','Marruecos','+212'],['IL','Israel','+972'],['TR','Turquía','+90'],
+  ['SA','Arabia Saudita','+966'],['AE','Emiratos Árabes','+971'],
+  ['KR','Corea del Sur','+82'],['PH','Filipinas','+63'],['ID','Indonesia','+62'],
+] as [string,string,string][]).map(([iso,name,dial]) => ({ iso, name, dial, flag: mkFlag(iso) }))
+const DEFAULT_COUNTRY = COUNTRIES[0]
+function phoneParseCountry(phone: string): Country {
+  if (!phone) return DEFAULT_COUNTRY
+  const sorted = [...COUNTRIES].sort((a, b) => b.dial.length - a.dial.length)
+  return sorted.find(c => phone.startsWith(c.dial)) ?? DEFAULT_COUNTRY
+}
+function phoneParseLocal(phone: string, country: Country): string {
+  if (!phone) return ''
+  if (phone.startsWith(country.dial)) return phone.slice(country.dial.length).trimStart()
+  return phone
+}
 
 // ── Module config ─────────────────────────────────────────────────────────────
 
@@ -164,6 +205,7 @@ function apiToPerson(m: ApiMember, idx: number): Person {
     birthdate: m.birthdate ?? undefined,
     anniversary: m.anniversary ?? undefined,
     orgRole: (m.role as 'admin' | 'leader' | 'member') ?? 'member',
+    avatar: m.avatar ?? undefined,
   }
 }
 
@@ -222,13 +264,17 @@ function storageKey(slug: string, kind: 'token' | 'user') {
 
 interface TenantSession {
   id: string; email: string; full_name: string | null
-  role: string; org_id: string; org_name: string; org_slug: string
+  role: string; org_id: string; org_name: string; org_slug: string; avatar?: string | null
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function TenantPortal() {
-  const { slug } = useParams<{ slug: string }>()
+  const { slug, module: urlModule, tab: urlTab } = useParams<{ slug: string; module?: string; tab?: string }>()
+  const navigate = useNavigate()
+
+  const VALID_MODULES: TModule[] = ['principal','servicios','miembros','equipos','partituras','eventos','ensayos','calendario','finanzas','configuracion','perfil']
+  const moduleFromUrl: TModule = (VALID_MODULES.includes(urlModule as TModule) ? urlModule : 'miembros') as TModule
 
   // ── Core state
   const [org, setOrg]             = useState<OrgInfo | null>(null)
@@ -239,16 +285,34 @@ export default function TenantPortal() {
   const [loggingIn, setLoggingIn] = useState(false)
   const [userName, setUserName]   = useState('')
   const [userRole, setUserRole]   = useState<OrgRole>('admin')
+  const [userId, setUserId]       = useState<string | null>(null)
+  const [userAvatar, setUserAvatar] = useState<string | null>(null)
   const [apiToken, setApiToken]   = useState<string | null>(null)
 
-  // ── Module & navigation
-  const [module, setModule]             = useState<TModule>('miembros')
+  // ── Module & navigation (URL-driven — refresh keeps you on current module)
+  const module: TModule = moduleFromUrl
+  const setModule = (m: TModule) => navigate(`/portal/${slug}/${m}`)
   const [dropOpen, setDropOpen]         = useState(false)
   const [logoutOpen, setLogoutOpen]     = useState(false)
-  const [miembrosTab, setMiembrosTab]   = useState<MiembrosTab>('miembros')
+  const [switchOrgs, setSwitchOrgs]     = useState<Array<{slug: string; name: string; icon: string | null}>>([])
+  const [switchToken, setSwitchToken]   = useState<string | null>(null)
+  const [switchOpen, setSwitchOpen]     = useState(false)
+  const [switchLoading, setSwitchLoading] = useState<string | null>(null)
+
+  // Sub-tabs — also URL-driven via :tab segment
+  const MIEMBROS_TABS: MiembrosTab[] = ['dashboard','miembros','flujos','formularios']
+  const SERVICIOS_TABS: ServiciosTab[] = ['mi-planificacion','servicios','canciones','media','personas']
+  const SETTINGS_TABS: SettingsTab[] = ['general','ministerios','roles','admins','integraciones','facturacion']
+  const miembrosTab: MiembrosTab = (MIEMBROS_TABS.includes(urlTab as MiembrosTab) ? urlTab : 'miembros') as MiembrosTab
+  const serviciosTab: ServiciosTab = (SERVICIOS_TABS.includes(urlTab as ServiciosTab) ? urlTab : 'servicios') as ServiciosTab
+  const settingsTabFromUrl: SettingsTab = (SETTINGS_TABS.includes(urlTab as SettingsTab) ? urlTab : 'general') as SettingsTab
+  const setMiembrosTab = (t: MiembrosTab) => navigate(`/portal/${slug}/miembros/${t}`)
+  const setServiciosTab = (t: ServiciosTab) => navigate(`/portal/${slug}/servicios/${t}`)
+  const setSettingsTabUrl = (t: SettingsTab) => navigate(`/portal/${slug}/configuracion/${t}`)
   const [miembrosView, setMiembrosView] = useState<MiembrosView>('todas')
   const [search, setSearch]             = useState('')
   const [hoveredTab, setHoveredTab]     = useState<MiembrosTab | null>(null)
+  const [hoveredSvcTab, setHoveredSvcTab] = useState<ServiciosTab | null>(null)
 
   // ── Members data
   const [members, setMembers]                   = useState<Person[]>([])
@@ -266,8 +330,21 @@ export default function TenantPortal() {
   const [isEditingMember, setIsEditingMember] = useState(false)
   const [deleteTarget, setDeleteTarget]   = useState<Person | null>(null)
 
-  // ── Settings
-  const [settingsTab, setSettingsTab]     = useState<SettingsTab>('general')
+  // ── Member attachments
+  interface Attachment { id: string; label: string; original_name: string; mime_type: string; size_bytes: number; uploaded_at: string }
+  const [attachments, setAttachments]         = useState<Attachment[]>([])
+  const [attLoading, setAttLoading]           = useState(false)
+  const [attUploadOpen, setAttUploadOpen]     = useState(false)
+  const [attUploadFile, setAttUploadFile]     = useState<File | null>(null)
+  const [attUploadLabel, setAttUploadLabel]   = useState('')
+  const [attUploading, setAttUploading]       = useState(false)
+  const [attUploadErr, setAttUploadErr]       = useState<string | null>(null)
+  const [attPreview, setAttPreview]           = useState<{ label: string; mime: string; data: string } | null>(null)
+  const attFileRef = useRef<HTMLInputElement>(null)
+
+  // ── Settings (URL-driven for module === 'configuracion')
+  const settingsTab = settingsTabFromUrl
+  const setSettingsTab = setSettingsTabUrl
   const [sName, setSName]                 = useState('')
   const [sAlias, setSAlias]               = useState('')
   const [sIcon, setSIcon]                 = useState<string | null>(null)
@@ -279,10 +356,25 @@ export default function TenantPortal() {
   const [sSaved, setSSaved]               = useState(false)
   const [sErr, setSErr]                   = useState<string | null>(null)
 
+  // ── Profile (own account)
+  const [pFirstName, setPFirstName]   = useState('')
+  const [pLastName, setPLastName]     = useState('')
+  const [pPrefix, setPPrefix]         = useState('')
+  const [pEmail, setPEmail]           = useState('')
+  const [pPhone, setPPhone]           = useState('')
+  const [pGender, setPGender]         = useState('')
+  const [pBirthdate, setPBirthdate]   = useState('')
+  const [pAnniversary, setPAnniversary] = useState('')
+  const [pAvatar, setPAvatar]         = useState<string | null>(null)
+  const [pSaving, setPSaving]         = useState(false)
+  const [pSaved, setPSaved]           = useState(false)
+  const [pErr, setPErr]               = useState<string | null>(null)
+
   // ── Refs
   const dropRef     = useRef<HTMLDivElement>(null)
   const logoutRef   = useRef<HTMLDivElement>(null)
   const iconInputRef = useRef<HTMLInputElement>(null)
+  const profileAvatarRef = useRef<HTMLInputElement>(null)
 
   const canEdit = userRole === 'admin' || userRole === 'lider'
 
@@ -292,37 +384,44 @@ export default function TenantPortal() {
       : { 'Content-Type': 'application/json' }
   }
 
+  function fetchApi(url: string, init?: RequestInit): Promise<Response> {
+    return fetch(url, { credentials: 'include', ...init })
+  }
+
   // ── Effects
   useEffect(() => {
     if (!slug) { setScreen('not-found'); return }
 
     const storedToken = localStorage.getItem(storageKey(slug, 'token'))
-    const storedUser  = localStorage.getItem(storageKey(slug, 'user'))
 
-    fetch(`/api/v1/organizations/slug/${slug}`)
+    fetch(`/api/v1/organizations/slug/${slug}`, { credentials: 'include' })
       .then(r => r.ok ? r.json() : null)
       .then(async (orgData) => {
         if (!orgData) { setScreen('not-found'); return }
         setOrg(orgData)
 
-        if (storedToken && storedUser) {
-          // Validate stored token
-          const meRes = await fetch(`/api/v1/tenant/${slug}/auth/me`, {
-            headers: { Authorization: `Bearer ${storedToken}` },
-          })
-          if (meRes.ok) {
-            const session: TenantSession = await meRes.json()
-            setApiToken(storedToken)
-            setUserName(session.full_name?.split(' ')[0] ?? session.email.split('@')[0])
-            setUserRole(session.role as OrgRole)
-            setScreen('app')
-            return
-          }
-          // Token invalid — clear and show login
-          localStorage.removeItem(storageKey(slug, 'token'))
-          localStorage.removeItem(storageKey(slug, 'user'))
+        // Try to validate session — uses Bearer if present, else httpOnly cookie
+        const headers: Record<string, string> = {}
+        if (storedToken) headers.Authorization = `Bearer ${storedToken}`
+        const meRes = await fetch(`/api/v1/tenant/${slug}/auth/me`, {
+          headers, credentials: 'include',
+        })
+        if (meRes.ok) {
+          const session: TenantSession = await meRes.json()
+          if (storedToken) setApiToken(storedToken)
+          setUserId(session.id)
+          setUserAvatar(session.avatar ?? null)
+          setUserName(session.full_name?.split(' ')[0] ?? session.email.split('@')[0])
+          setUserRole(session.role as OrgRole)
+          setScreen('app')
+          fetchSwitchOptionsFor(slug, storedToken)
+          return
         }
-        setScreen('login')
+
+        // No valid session → redirect to unified login
+        localStorage.removeItem(storageKey(slug, 'token'))
+        localStorage.removeItem(storageKey(slug, 'user'))
+        navigate('/portal', { replace: true })
       })
       .catch(() => setScreen('not-found'))
   }, [slug])
@@ -345,7 +444,7 @@ export default function TenantPortal() {
     if (screen !== 'app' || !slug) return
     setMembersLoading(true)
     const headers: Record<string, string> = apiToken ? { Authorization: `Bearer ${apiToken}` } : {}
-    fetch(`/api/v1/tenant/${slug}/members`, { headers })
+    fetchApi(`/api/v1/tenant/${slug}/members`, { headers })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then((data: ApiMember[]) => setMembers(data.map((m, i) => apiToPerson(m, i))))
       .catch(() => {})
@@ -361,6 +460,7 @@ export default function TenantPortal() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: email.trim(), password }),
+      credentials: 'include',
     })
     if (!res.ok) {
       const detail = await res.json().then(d => d.detail).catch(() => 'Error')
@@ -373,21 +473,71 @@ export default function TenantPortal() {
     localStorage.setItem(storageKey(slug, 'token'), data.access_token)
     localStorage.setItem(storageKey(slug, 'user'), JSON.stringify(session))
     setApiToken(data.access_token)
+    setUserId(session.id)
+    setUserAvatar(session.avatar ?? null)
     setUserName(session.full_name?.split(' ')[0] ?? session.email.split('@')[0])
     setUserRole(session.role as OrgRole)
     setLoggingIn(false)
     setScreen('app')
+    fetchSwitchOptionsFor(slug, data.access_token)
   }
 
-  function handleLogout() {
+  async function handleLogout() {
     if (slug) {
+      await fetch(`/api/v1/tenant/${slug}/auth/logout`, {
+        method: 'POST',
+        credentials: 'include',
+      }).catch(() => {})
       localStorage.removeItem(storageKey(slug, 'token'))
       localStorage.removeItem(storageKey(slug, 'user'))
     }
     setApiToken(null)
-    setScreen('login')
     setUserName(''); setEmail(''); setPassword('')
     setLogoutOpen(false); setModule('miembros'); setMembers([])
+    navigate('/portal', { replace: true })
+  }
+
+  async function fetchSwitchOptionsFor(orgSlug: string | undefined, tok: string | null) {
+    if (!orgSlug) return
+    const h: Record<string, string> = tok ? { Authorization: `Bearer ${tok}` } : {}
+    try {
+      const res = await fetch(`/api/v1/tenant/${orgSlug}/auth/switch-options`, {
+        headers: h, credentials: 'include',
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setSwitchOrgs(data.orgs ?? [])
+        setSwitchToken(data.partial_token ?? null)
+      }
+    } catch {}
+  }
+
+  async function handleSwitchOrg(targetSlug: string, targetName: string) {
+    if (!switchToken) return
+    setLogoutOpen(false); setSwitchOpen(false)
+    setSwitchLoading(targetName)
+    try {
+      const res = await fetch('/api/v1/tenant/auth/select', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ partial_token: switchToken, slug: targetSlug }),
+        credentials: 'include',
+      })
+      if (!res.ok) { setSwitchLoading(null); return }
+      const data = await res.json()
+      if (slug) {
+        localStorage.removeItem(storageKey(slug, 'token'))
+        localStorage.removeItem(storageKey(slug, 'user'))
+      }
+      localStorage.setItem(storageKey(targetSlug, 'token'), data.access_token)
+      localStorage.setItem(storageKey(targetSlug, 'user'), JSON.stringify(data.member))
+      setTimeout(() => {
+        setSwitchLoading(null)
+        navigate(`/portal/${targetSlug}`, { replace: true })
+      }, 1200)
+    } catch {
+      setSwitchLoading(null)
+    }
   }
 
   function switchModule(m: TModule) { setModule(m); setDropOpen(false) }
@@ -417,7 +567,7 @@ export default function TenantPortal() {
       org_roles: form.roles,
       is_active: form.status === 'active',
     }
-    const res = await fetch(`/api/v1/tenant/${slug}/members`, {
+    const res = await fetchApi(`/api/v1/tenant/${slug}/members`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(payload),
@@ -453,7 +603,7 @@ export default function TenantPortal() {
       org_roles: editForm.roles,
       is_active: editForm.status === 'active',
     }
-    const res = await fetch(`/api/v1/tenant/${slug}/members/${editTarget.id}`, {
+    const res = await fetchApi(`/api/v1/tenant/${slug}/members/${editTarget.id}`, {
       method: 'PUT',
       headers: authHeaders(),
       body: JSON.stringify(payload),
@@ -478,13 +628,63 @@ export default function TenantPortal() {
 
   async function handleDeleteMember() {
     if (!deleteTarget) return
-    const res = await fetch(`/api/v1/tenant/${slug}/members/${deleteTarget.id}`, {
+    const res = await fetchApi(`/api/v1/tenant/${slug}/members/${deleteTarget.id}`, {
       method: 'DELETE',
       headers: apiToken ? { Authorization: `Bearer ${apiToken}` } : {},
     })
     if (!res.ok && res.status !== 204) return
     setMembers(prev => prev.filter(p => p.id !== deleteTarget.id))
     setDeleteTarget(null)
+  }
+
+  // ── Attachment helpers
+  function attAuthHeaders(): Record<string, string> {
+    return apiToken ? { Authorization: `Bearer ${apiToken}` } : {}
+  }
+
+  async function fetchAttachments(memberId: string) {
+    setAttachments([]); setAttLoading(true)
+    try {
+      const res = await fetchApi(`/api/v1/tenant/${slug}/members/${memberId}/attachments`, { headers: attAuthHeaders() })
+      if (res.ok) setAttachments(await res.json())
+    } finally { setAttLoading(false) }
+  }
+
+  async function uploadAttachment() {
+    if (!attUploadFile || !selectedMember) return
+    if (!attUploadLabel.trim()) { setAttUploadErr('La etiqueta es obligatoria'); return }
+    setAttUploading(true); setAttUploadErr(null)
+    try {
+      const fd = new FormData()
+      fd.append('file', attUploadFile)
+      fd.append('label', attUploadLabel.trim())
+      const res = await fetchApi(`/api/v1/tenant/${slug}/members/${selectedMember.id}/attachments`, {
+        method: 'POST', headers: attAuthHeaders(), body: fd,
+      })
+      if (!res.ok) { const j = await res.json(); throw new Error(j.detail || 'Error'); }
+      const created = await res.json()
+      setAttachments(prev => [created, ...prev])
+      setAttUploadOpen(false); setAttUploadFile(null); setAttUploadLabel('')
+    } catch (e: any) { setAttUploadErr(e.message) }
+    finally { setAttUploading(false) }
+  }
+
+  async function deleteAttachment(attId: string) {
+    if (!selectedMember) return
+    await fetchApi(`/api/v1/tenant/${slug}/members/${selectedMember.id}/attachments/${attId}`, {
+      method: 'DELETE', headers: attAuthHeaders(),
+    })
+    setAttachments(prev => prev.filter(a => a.id !== attId))
+  }
+
+  async function previewAttachment(att: { id: string; label: string; mime_type: string }) {
+    if (!selectedMember) return
+    const res = await fetchApi(`/api/v1/tenant/${slug}/members/${selectedMember.id}/attachments/${att.id}/data`, {
+      headers: attAuthHeaders(),
+    })
+    if (!res.ok) return
+    const j = await res.json()
+    setAttPreview({ label: j.label, mime: j.mime_type, data: j.file_data })
   }
 
   // Init settings state when entering configuracion
@@ -502,7 +702,7 @@ export default function TenantPortal() {
   async function saveSettings(partial: Record<string, unknown>) {
     if (!slug) return
     setSSaving(true); setSErr(null)
-    const res = await fetch(`/api/v1/tenant/${slug}/settings`, {
+    const res = await fetchApi(`/api/v1/tenant/${slug}/settings`, {
       method: 'PATCH',
       headers: authHeaders(),
       body: JSON.stringify(partial),
@@ -534,6 +734,69 @@ export default function TenantPortal() {
     }))
   }
 
+  // Profile init — load own member data when entering profile view
+  useEffect(() => {
+    if (module !== 'perfil' || !slug || !userId || !apiToken) return
+    fetchApi(`/api/v1/tenant/${slug}/members/${userId}`, {
+      headers: { Authorization: `Bearer ${apiToken}` },
+    }).then(r => r.ok ? r.json() : null).then((m: ApiMember | null) => {
+      if (!m) return
+      const nameParts = (m.full_name || '').split(' ')
+      const prefixes = ['Sr.','Sra.','Rvdo.','Rvda.','Dr.','Dra.']
+      const prefix = prefixes.includes(nameParts[0]) ? nameParts[0] : ''
+      const rest = prefix ? nameParts.slice(1) : nameParts
+      setPPrefix(prefix)
+      setPFirstName(rest[0] ?? '')
+      setPLastName(rest.slice(1).join(' '))
+      setPEmail(m.email)
+      setPPhone(m.phone ?? '')
+      setPGender(m.gender ?? '')
+      setPBirthdate(m.birthdate ?? '')
+      setPAnniversary(m.anniversary ?? '')
+      setPAvatar(m.avatar ?? null)
+    }).catch(() => {})
+  }, [module, slug, userId, apiToken])
+
+  async function handleProfileAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (file.size > 3 * 1024 * 1024) { setPErr('La imagen no puede superar 3 MB'); return }
+    const reader = new FileReader()
+    reader.onload = ev => setPAvatar(ev.target?.result as string)
+    reader.readAsDataURL(file)
+  }
+
+  async function saveProfile() {
+    if (!slug || !apiToken) return
+    if (!pFirstName.trim()) { setPErr('El nombre es obligatorio'); return }
+    setPSaving(true); setPErr(null); setPSaved(false)
+    const fullName = [pPrefix, pFirstName.trim(), pLastName.trim()].filter(Boolean).join(' ')
+    const payload: Record<string, unknown> = {
+      full_name: fullName || null,
+      phone: pPhone || null,
+      prefix: pPrefix || null,
+      gender: pGender || null,
+      birthdate: pBirthdate || null,
+      anniversary: pAnniversary || null,
+      email: pEmail.trim() || null,
+      avatar: pAvatar,
+    }
+    const res = await fetchApi(`/api/v1/tenant/${slug}/auth/profile`, {
+      method: 'PATCH',
+      headers: authHeaders(),
+      body: JSON.stringify(payload),
+    })
+    setPSaving(false)
+    if (res.status === 409) { setPErr('Ese correo ya está en uso'); return }
+    if (res.status === 400) { const d = await res.json(); setPErr(d.detail ?? 'Error'); return }
+    if (!res.ok) { setPErr('Error al guardar. Inténtalo de nuevo.'); return }
+    const updated: ApiMember = await res.json()
+    setUserAvatar(updated.avatar ?? null)
+    setUserName(pFirstName.trim())
+    setPSaved(true)
+    setTimeout(() => setPSaved(false), 3000)
+  }
+
   const currentMod = MODULES.find(m => m.id === module)
 
   // ── Loading screen
@@ -560,43 +823,8 @@ export default function TenantPortal() {
     </div>
   )
 
-  // ── Login
-  if (screen === 'login') return (
-    <div style={s.fullPage}>
-      <div style={s.loginCard}>
-        <div style={s.wLogo}>
-          <svg viewBox="0 0 44 32" xmlns="http://www.w3.org/2000/svg" style={{ width: 28, height: 20 }}>
-            <rect x="0"    y="2"  width="7" height="28" rx="3.5" fill="white"/>
-            <rect x="10"   y="16" width="7" height="14" rx="3.5" fill="white"/>
-            <rect x="18.5" y="8"  width="7" height="22" rx="3.5" fill="white"/>
-            <rect x="27"   y="16" width="7" height="14" rx="3.5" fill="white"/>
-            <rect x="37"   y="2"  width="7" height="28" rx="3.5" fill="white"/>
-          </svg>
-        </div>
-        <p style={s.eyebrow}>Portal de acceso</p>
-        <h2 style={s.loginTitle}>{org.name}</h2>
-        {org.alias && <p style={s.loginSub}>@{org.alias}</p>}
-        {loginErr && <div style={s.loginError}>{loginErr}</div>}
-        <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: 13, marginTop: 10, width: '100%' }}>
-          <div style={s.field}>
-            <label style={s.label}>Correo electrónico</label>
-            <input style={s.input} type="email" value={email} autoComplete="email"
-              onChange={e => setEmail(e.target.value)} placeholder="tu@correo.com" required />
-          </div>
-          <div style={s.field}>
-            <label style={s.label}>Contraseña</label>
-            <input style={s.input} type="password" value={password} autoComplete="current-password"
-              onChange={e => setPassword(e.target.value)} placeholder="••••••••" required />
-          </div>
-          <button type="submit" disabled={loggingIn}
-            style={{ ...s.loginBtn, ...(loggingIn ? { opacity: 0.65, cursor: 'not-allowed' } : {}) }}>
-            {loggingIn ? 'Entrando…' : 'Iniciar sesión'}
-          </button>
-        </form>
-        <p style={s.powered}>Powered by <strong style={{ color: C.primary }}>Worsyn</strong></p>
-      </div>
-    </div>
-  )
+  // ── Login screen removed — unauthenticated users redirect to /portal (see useEffect)
+  if (screen === 'login') return null
 
   // ── App shell ──────────────────────────────────────────────────────────────
 
@@ -684,7 +912,7 @@ export default function TenantPortal() {
         <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
           {module === 'miembros' && (
             <nav style={s.tabNav}>
-              {(['dashboard', 'miembros', 'flujos'] as MiembrosTab[]).map(tab => {
+              {(['dashboard', 'miembros', 'flujos', 'formularios'] as MiembrosTab[]).map(tab => {
                 const isActive  = miembrosTab === tab
                 const isHovered = hoveredTab === tab
                 return (
@@ -697,7 +925,32 @@ export default function TenantPortal() {
                     onClick={() => setMiembrosTab(tab)}
                     onMouseEnter={() => setHoveredTab(tab)}
                     onMouseLeave={() => setHoveredTab(null)}>
-                    {tab === 'dashboard' ? 'Dashboard' : tab === 'miembros' ? 'Miembros' : 'Flujos'}
+                    {tab === 'dashboard' ? 'Dashboard' : tab === 'miembros' ? 'Miembros' : tab === 'flujos' ? 'Flujos' : 'Formularios'}
+                  </button>
+                )
+              })}
+            </nav>
+          )}
+          {module === 'servicios' && (
+            <nav style={s.tabNav}>
+              {(['mi-planificacion', 'servicios', 'canciones', 'media', 'personas'] as ServiciosTab[]).map(tab => {
+                const labels: Record<ServiciosTab, string> = {
+                  'mi-planificacion': 'Mi Planificación', 'servicios': 'Servicios',
+                  'canciones': 'Canciones', 'media': 'Media', 'personas': 'Personas',
+                }
+                const isActive  = serviciosTab === tab
+                const isHovered = hoveredSvcTab === tab
+                return (
+                  <button key={tab}
+                    style={{
+                      ...s.tabBtn,
+                      ...(isActive ? s.tabBtnActive : {}),
+                      ...(isHovered && !isActive ? { background: C.soft, color: C.text } : {}),
+                    }}
+                    onClick={() => setServiciosTab(tab)}
+                    onMouseEnter={() => setHoveredSvcTab(tab)}
+                    onMouseLeave={() => setHoveredSvcTab(null)}>
+                    {labels[tab]}
                   </button>
                 )
               })}
@@ -710,7 +963,12 @@ export default function TenantPortal() {
           <span style={s.orgName}>{org.name}</span>
           <div style={{ position: 'relative' }} ref={logoutRef}>
             <button style={s.topUser} onClick={() => setLogoutOpen(o => !o)}>
-              <div style={s.userAvatar}>{userName.slice(0, 2).toUpperCase()}</div>
+              <div style={s.userAvatar}>
+                {userAvatar
+                  ? <img src={userAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 8 }} />
+                  : userName.slice(0, 2).toUpperCase()
+                }
+              </div>
               <span style={s.userName}>{userName}</span>
               <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14} style={{ color: C.light }}>
                 <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd"/>
@@ -723,6 +981,37 @@ export default function TenantPortal() {
                   <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{email}</div>
                   <div style={{ fontSize: 10, color: C.light, marginTop: 3, textTransform: 'capitalize' }}>{userRole}</div>
                 </div>
+                {switchOrgs.length > 0 && (
+                  <>
+                    <div style={{ height: 1, background: C.border }} />
+                    <button style={{ ...s.logoutBtn, color: C.text }}
+                      onClick={() => {
+                        setLogoutOpen(false)
+                        if (switchOrgs.length === 1) {
+                          handleSwitchOrg(switchOrgs[0].slug, switchOrgs[0].name)
+                        } else {
+                          setSwitchOpen(true)
+                        }
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = C.soft}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14}>
+                        <path d="M8 5a1 1 0 000 2h5.586l-1.293 1.293a1 1 0 001.414 1.414l3-3a1 1 0 000-1.414l-3-3a1 1 0 10-1.414 1.414L13.586 5H8zM12 15a1 1 0 100-2H6.414l1.293-1.293a1 1 0 10-1.414-1.414l-3 3a1 1 0 000 1.414l3 3a1 1 0 001.414-1.414L6.414 15H12z"/>
+                      </svg>
+                      Cambiar de cuenta
+                    </button>
+                  </>
+                )}
+                <div style={{ height: 1, background: C.border }} />
+                <button style={{ ...s.logoutBtn, color: C.text }}
+                  onClick={() => { setLogoutOpen(false); switchModule('perfil') }}
+                  onMouseEnter={e => e.currentTarget.style.background = C.soft}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14}>
+                    <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd"/>
+                  </svg>
+                  Mi perfil
+                </button>
                 <div style={{ height: 1, background: C.border }} />
                 <button style={s.logoutBtn} onClick={handleLogout}
                   onMouseEnter={e => e.currentTarget.style.background = '#FEF2F2'}
@@ -888,7 +1177,7 @@ export default function TenantPortal() {
                     {displayMembers.map(p => (
                       <tr key={p.id}
                         style={s.tr}
-                        onClick={() => setSelectedMember(p)}
+                        onClick={() => { setSelectedMember(p); fetchAttachments(p.id) }}
                         onMouseEnter={e => { e.currentTarget.style.background = C.soft }}
                         onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
                         <td style={s.td}>
@@ -975,8 +1264,27 @@ export default function TenantPortal() {
           </main>
         )}
 
+        {/* ── Miembros — Formularios ────────────────────────────────────────── */}
+        {module === 'miembros' && miembrosTab === 'formularios' && (
+          <main style={{ ...s.main, alignItems: 'center', justifyContent: 'center', display: 'flex' }}>
+            <div style={s.placeholder}>
+              <div style={{ ...s.placeholderIcon, background: '#0891B2' }}>
+                <svg viewBox="0 0 20 20" fill="currentColor" width={26} height={26}>
+                  <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd"/>
+                </svg>
+              </div>
+              <h2 style={s.placeholderTitle}>Formularios</h2>
+              <p style={s.placeholderSub}>Crea formularios personalizados para registro de visitas, solicitudes y seguimiento de miembros.</p>
+              <span style={s.comingBadge}>Próximamente</span>
+            </div>
+          </main>
+        )}
+
+        {/* ── Servicios (módulo independiente en src/tenant/pages/Servicios.tsx) ── */}
+        {module === 'servicios' && <Servicios tab={serviciosTab} />}
+
         {/* ── Other modules ─────────────────────────────────────────────────── */}
-        {module !== 'miembros' && module !== 'configuracion' && (
+        {module !== 'miembros' && module !== 'servicios' && module !== 'configuracion' && module !== 'perfil' && (
           <main style={{ ...s.main, alignItems: 'center', justifyContent: 'center', display: 'flex' }}>
             <div style={s.placeholder}>
               <div style={{ ...s.placeholderIcon, background: currentMod?.color ?? C.muted }}>
@@ -985,6 +1293,113 @@ export default function TenantPortal() {
               <h2 style={s.placeholderTitle}>{currentMod?.label}</h2>
               <p style={s.placeholderSub}>Este módulo estará disponible próximamente.<br/>Estamos construyendo algo increíble para tu iglesia.</p>
               <span style={s.comingBadge}>Próximamente</span>
+            </div>
+          </main>
+        )}
+
+        {/* ── Mi perfil ─────────────────────────────────────────────────────── */}
+        {module === 'perfil' && (
+          <main style={{ ...s.main, gap: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+              <div>
+                <h1 style={s.mainTitle}>Mi perfil</h1>
+                <p style={s.mainSub}>Gestiona tu información personal</p>
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button style={s.btnGhost} onClick={() => switchModule('miembros')}>Volver</button>
+                <button style={s.btnPrimary} onClick={saveProfile} disabled={pSaving}>
+                  {pSaving ? 'Guardando…' : pSaved ? '✓ Guardado' : 'Guardar cambios'}
+                </button>
+              </div>
+            </div>
+
+            {pErr && <div style={s.formErr}>{pErr}</div>}
+
+            <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 20, alignItems: 'start' }}>
+
+              {/* Avatar card */}
+              <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: '28px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, textAlign: 'center' }}>
+                <div style={{ width: 90, height: 90, borderRadius: 24, background: C.primary, color: '#fff', fontSize: 30, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
+                  {pAvatar
+                    ? <img src={pAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    : userName.slice(0, 2).toUpperCase()
+                  }
+                </div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{userName}</div>
+                  <div style={{ fontSize: 12, color: C.light, marginTop: 2 }}>{pEmail}</div>
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 4, textTransform: 'capitalize' }}>{userRole}</div>
+                </div>
+                <input ref={profileAvatarRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleProfileAvatarUpload} />
+                <button style={{ ...s.btnGhost, width: '100%', justifyContent: 'center' }} onClick={() => profileAvatarRef.current?.click()}>
+                  <svg viewBox="0 0 20 20" fill="currentColor" width={13} height={13}><path fillRule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" clipRule="evenodd"/></svg>
+                  Cambiar foto
+                </button>
+                {pAvatar && (
+                  <button style={{ ...s.btnGhost, width: '100%', justifyContent: 'center', color: C.danger, borderColor: 'rgba(239,68,68,.3)', fontSize: 12 }}
+                    onClick={() => setPAvatar(null)}>
+                    Eliminar foto
+                  </button>
+                )}
+                <p style={{ fontSize: 11, color: C.light, margin: 0 }}>Máx. 3 MB · JPG, PNG, WebP</p>
+              </div>
+
+              {/* Info form */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, overflow: 'visible' }}>
+                  <div style={{ padding: '14px 20px 12px', borderBottom: `1px solid ${C.border}`, borderRadius: '14px 14px 0 0' }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: C.light, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>CUENTA</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Información personal</div>
+                  </div>
+                  <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <div style={{ flex: '0 0 110px' }}>
+                        <label style={s.formLabel}>Prefijo</label>
+                        <SelectField value={pPrefix} onChange={e => setPPrefix(e.target.value)}>
+                          <option value="">—</option>
+                          {['Sr.','Sra.','Rvdo.','Rvda.','Dr.','Dra.'].map(p => <option key={p} value={p}>{p}</option>)}
+                        </SelectField>
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label style={s.formLabel}>Nombre *</label>
+                        <input style={s.formInput} value={pFirstName} onChange={e => setPFirstName(e.target.value)} placeholder="Nombre" />
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label style={s.formLabel}>Apellido</label>
+                        <input style={s.formInput} value={pLastName} onChange={e => setPLastName(e.target.value)} placeholder="Apellido" />
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <div style={{ flex: 1 }}>
+                        <label style={s.formLabel}>Correo electrónico</label>
+                        <input style={s.formInput} type="email" value={pEmail} onChange={e => setPEmail(e.target.value)} placeholder="tu@correo.com" />
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label style={s.formLabel}>Teléfono</label>
+                        <PhoneInput value={pPhone} onChange={setPPhone} inputStyle={s.formInput} />
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <div style={{ flex: 1 }}>
+                        <label style={s.formLabel}>Género</label>
+                        <SelectField value={pGender} onChange={e => setPGender(e.target.value)}>
+                          <option value="">—</option>
+                          <option value="M">Masculino</option>
+                          <option value="F">Femenino</option>
+                        </SelectField>
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label style={s.formLabel}>Fecha de nacimiento</label>
+                        <input style={s.formInput} type="date" value={pBirthdate} onChange={e => setPBirthdate(e.target.value)} />
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label style={s.formLabel}>Aniversario de boda</label>
+                        <input style={s.formInput} type="date" value={pAnniversary} onChange={e => setPAnniversary(e.target.value)} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </main>
         )}
@@ -1052,8 +1467,11 @@ export default function TenantPortal() {
 
               {/* Left: avatar card */}
               <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: '28px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center' }}>
-                <div style={{ width: 84, height: 84, borderRadius: 22, background: selectedMember.color, color: '#fff', fontSize: 28, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {selectedMember.initials}
+                <div style={{ width: 84, height: 84, borderRadius: 22, background: selectedMember.color, color: '#fff', fontSize: 28, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                  {selectedMember.avatar
+                    ? <img src={selectedMember.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    : selectedMember.initials
+                  }
                 </div>
                 <div>
                   <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{selectedMember.name}</div>
@@ -1077,8 +1495,8 @@ export default function TenantPortal() {
                 )}
 
                 {/* Información del miembro */}
-                <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, overflow: 'hidden' }}>
-                  <div style={{ padding: '14px 20px 12px', borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, overflow: 'visible' }}>
+                  <div style={{ padding: '14px 20px 12px', borderBottom: `1px solid ${C.border}`, borderRadius: '14px 14px 0 0' }}>
                     <div style={{ fontSize: 10, fontWeight: 700, color: C.light, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>PERFIL</div>
                     <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Información del miembro</div>
                   </div>
@@ -1108,7 +1526,7 @@ export default function TenantPortal() {
                         </div>
                         <div style={{ flex: 1 }}>
                           <label style={s.formLabel}>Teléfono</label>
-                          <input style={s.formInput} type="tel" value={editForm.phone} onChange={e => setEditForm(f => ({ ...f, phone: e.target.value }))} placeholder="+34 600 000 000" />
+                          <PhoneInput value={editForm.phone} onChange={v => setEditForm(f => ({ ...f, phone: v }))} inputStyle={s.formInput} />
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: 10 }}>
@@ -1236,9 +1654,151 @@ export default function TenantPortal() {
                   )}
                 </div>
 
+                {/* Documentos adjuntos */}
+                <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, overflow: 'hidden' }}>
+                  <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Documentos adjuntos</div>
+                    {canEdit && (
+                      <button style={s.btnPrimary} onClick={() => { setAttUploadOpen(true); setAttUploadErr(null); setAttUploadFile(null); setAttUploadLabel('') }}>
+                        + Subir documento
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ padding: attLoading || attachments.length === 0 ? '24px 20px' : 0 }}>
+                    {attLoading ? (
+                      <p style={{ fontSize: 13, color: C.light, margin: 0 }}>Cargando…</p>
+                    ) : attachments.length === 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '12px 0' }}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke={C.light} strokeWidth="1.5" width={32} height={32}><path d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                        <p style={{ fontSize: 13, color: C.light, margin: 0 }}>Sin documentos adjuntos</p>
+                      </div>
+                    ) : (
+                      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <thead>
+                          <tr>
+                            {['Nombre', 'Archivo', 'Tamaño', 'Subido', ''].map(h => (
+                              <th key={h} style={{ fontSize: 11, fontWeight: 700, color: C.light, textTransform: 'uppercase', letterSpacing: '0.07em', padding: '8px 16px', borderBottom: `1px solid ${C.border}`, textAlign: 'left' }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {attachments.map(att => (
+                            <tr key={att.id}>
+                              <td style={{ padding: '10px 16px', borderBottom: `1px solid ${C.soft}`, fontSize: 13, fontWeight: 600, color: C.text }}>{att.label}</td>
+                              <td style={{ padding: '10px 16px', borderBottom: `1px solid ${C.soft}`, fontSize: 12, color: C.muted, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{att.original_name}</td>
+                              <td style={{ padding: '10px 16px', borderBottom: `1px solid ${C.soft}`, fontSize: 12, color: C.muted, whiteSpace: 'nowrap' }}>{(att.size_bytes / 1024).toFixed(0)} KB</td>
+                              <td style={{ padding: '10px 16px', borderBottom: `1px solid ${C.soft}`, fontSize: 12, color: C.muted, whiteSpace: 'nowrap' }}>{new Date(att.uploaded_at).toLocaleDateString('es-ES')}</td>
+                              <td style={{ padding: '10px 16px', borderBottom: `1px solid ${C.soft}` }}>
+                                {canEdit && (
+                                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                                    <button
+                                      style={{ fontSize: 12, padding: '4px 10px', border: `1px solid ${C.border}`, borderRadius: 6, background: 'none', cursor: 'pointer', color: C.primary, fontWeight: 600 }}
+                                      onClick={() => previewAttachment(att)}>
+                                      Vista previa
+                                    </button>
+                                    <button
+                                      style={{ fontSize: 12, padding: '4px 10px', border: `1px solid ${C.border}`, borderRadius: 6, background: 'none', cursor: 'pointer', color: C.muted }}
+                                      onClick={async () => {
+                                        if (!selectedMember) return
+                                        const res = await fetchApi(`/api/v1/tenant/${slug}/members/${selectedMember.id}/attachments/${att.id}/data`, { headers: attAuthHeaders() })
+                                        if (!res.ok) return
+                                        const j = await res.json()
+                                        const a = document.createElement('a')
+                                        a.href = `data:${j.mime_type};base64,${j.file_data}`
+                                        a.download = j.original_name
+                                        a.click()
+                                      }}>
+                                      Descargar
+                                    </button>
+                                    <button
+                                      style={{ fontSize: 12, padding: '4px 10px', border: '1px solid rgba(239,68,68,.3)', borderRadius: 6, background: 'none', cursor: 'pointer', color: C.danger }}
+                                      onClick={() => deleteAttachment(att.id)}>
+                                      Eliminar
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+
               </div>
             </div>
           </main>
+        )}
+
+        {/* ── Upload attachment modal */}
+        {attUploadOpen && selectedMember && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}
+            onClick={e => e.target === e.currentTarget && setAttUploadOpen(false)}>
+            <div style={{ background: C.surface, borderRadius: 14, padding: '28px 28px 24px', width: 420, display: 'flex', flexDirection: 'column', gap: 18, boxShadow: '0 8px 40px rgba(0,0,0,.18)' }}>
+              <h3 style={{ fontSize: 17, fontWeight: 700, color: C.text, margin: 0 }}>Subir documento</h3>
+              <label style={{ fontSize: 13, fontWeight: 600, color: C.text, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                Etiqueta / nombre del documento
+                <input
+                  style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 12px', fontSize: 14, color: C.text, outline: 'none' }}
+                  value={attUploadLabel}
+                  onChange={e => setAttUploadLabel(e.target.value)}
+                  placeholder="p. ej. Certificado manipulación alimentos"
+                  autoFocus
+                />
+              </label>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 8 }}>Archivo</div>
+                <div
+                  style={{ border: `2px dashed ${attUploadFile ? C.primary : C.border}`, borderRadius: 10, padding: '20px 16px', textAlign: 'center', cursor: 'pointer', background: attUploadFile ? '#EEF2FF' : C.soft }}
+                  onClick={() => attFileRef.current?.click()}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) setAttUploadFile(f) }}>
+                  <input ref={attFileRef} type="file" style={{ display: 'none' }} onChange={e => setAttUploadFile(e.target.files?.[0] ?? null)} />
+                  {attUploadFile
+                    ? <><div style={{ fontSize: 14, fontWeight: 600, color: C.primary }}>{attUploadFile.name}</div><div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{(attUploadFile.size / 1024).toFixed(0)} KB</div></>
+                    : <><div style={{ fontSize: 13, color: C.muted }}>Arrastra un archivo o haz clic para seleccionar</div><div style={{ fontSize: 11, color: C.light, marginTop: 4 }}>PDF, imágenes, documentos — máx. 10 MB</div></>
+                  }
+                </div>
+              </div>
+              {attUploadErr && <p style={{ fontSize: 12, color: C.danger, margin: 0 }}>{attUploadErr}</p>}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                <button style={s.btnGhost} onClick={() => setAttUploadOpen(false)}>Cancelar</button>
+                <button style={s.btnPrimary} disabled={attUploading || !attUploadFile} onClick={uploadAttachment}>
+                  {attUploading ? 'Subiendo…' : 'Subir'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Document preview modal */}
+        {attPreview && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.7)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 300, padding: 24 }}
+            onClick={e => e.target === e.currentTarget && setAttPreview(null)}>
+            <div style={{ background: C.surface, borderRadius: 14, width: '100%', maxWidth: 860, maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 16px 60px rgba(0,0,0,.4)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: `1px solid ${C.border}` }}>
+                <span style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{attPreview.label}</span>
+                <button style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: C.muted, lineHeight: 1 }} onClick={() => setAttPreview(null)}>✕</button>
+              </div>
+              <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#1E293B', minHeight: 400 }}>
+                {attPreview.mime.startsWith('image/') ? (
+                  <img src={`data:${attPreview.mime};base64,${attPreview.data}`} alt={attPreview.label} style={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain' }} />
+                ) : attPreview.mime === 'application/pdf' ? (
+                  <iframe
+                    src={`data:application/pdf;base64,${attPreview.data}`}
+                    style={{ width: '100%', height: '75vh', border: 'none' }}
+                    title={attPreview.label}
+                  />
+                ) : (
+                  <div style={{ color: '#94A3B8', fontSize: 14, textAlign: 'center', padding: 40 }}>
+                    Vista previa no disponible para este tipo de archivo.<br />
+                    <span style={{ fontSize: 12, opacity: .7 }}>{attPreview.mime}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         )}
 
         {/* ── Configuración ─────────────────────────────────────────────────── */}
@@ -1630,6 +2190,59 @@ export default function TenantPortal() {
         />
       )}
 
+      {/* ── Switch account loading overlay ──────────────────────────────────── */}
+      {switchLoading && (
+        <div style={{ ...s.overlay, zIndex: 600, flexDirection: 'column', gap: 16 }}>
+          <div style={{ width: 40, height: 40, border: '3px solid rgba(255,255,255,.15)', borderTop: '3px solid #fff', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+          <div style={{ color: '#fff', fontSize: 15, fontWeight: 500, textAlign: 'center' }}>
+            Cambiando a <strong>{switchLoading}</strong>…
+          </div>
+        </div>
+      )}
+
+      {/* ── Switch account org picker ────────────────────────────────────────── */}
+      {switchOpen && (
+        <div style={s.overlay} onClick={e => { if (e.target === e.currentTarget) setSwitchOpen(false) }}>
+          <div style={{ ...s.modal, maxWidth: 380 }}>
+            <div style={s.modalHead}>
+              <span style={s.modalTitle}>Cambiar de cuenta</span>
+              <button style={s.modalClose} onClick={() => setSwitchOpen(false)}>
+                <svg viewBox="0 0 20 20" fill="currentColor" width={16} height={16}>
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd"/>
+                </svg>
+              </button>
+            </div>
+            <div style={{ padding: '16px 20px 20px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <p style={{ margin: '0 0 6px', fontSize: 13, color: C.muted }}>Elige la organización a la que quieres cambiar.</p>
+              {switchOrgs.map(o => {
+                const color = AVATAR_COLORS[o.name.charCodeAt(0) % AVATAR_COLORS.length]
+                return (
+                  <button key={o.slug}
+                    onClick={() => handleSwitchOrg(o.slug, o.name)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 14px', border: `1px solid ${C.border}`, borderRadius: 10, cursor: 'pointer', background: C.surface, width: '100%', transition: 'border-color 120ms, background 120ms', textAlign: 'left' }}
+                    onMouseEnter={e => { e.currentTarget.style.background = C.soft; e.currentTarget.style.borderColor = C.primary }}
+                    onMouseLeave={e => { e.currentTarget.style.background = C.surface; e.currentTarget.style.borderColor = C.border }}>
+                    {o.icon
+                      ? <img src={o.icon} alt={o.name} style={{ width: 40, height: 40, borderRadius: 10, objectFit: 'cover', flexShrink: 0 }} />
+                      : <div style={{ width: 40, height: 40, borderRadius: 10, background: color, color: '#fff', display: 'grid', placeItems: 'center', fontSize: 15, fontWeight: 700, flexShrink: 0 }}>
+                          {o.name.slice(0, 2).toUpperCase()}
+                        </div>
+                    }
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{o.name}</div>
+                      <div style={{ fontSize: 12, color: C.muted }}>{o.slug}</div>
+                    </div>
+                    <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14} style={{ color: C.light, flexShrink: 0 }}>
+                      <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd"/>
+                    </svg>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Delete confirmation ──────────────────────────────────────────────── */}
       {deleteTarget && (
         <div style={s.overlay} onClick={e => { if (e.target === e.currentTarget) setDeleteTarget(null) }}>
@@ -1679,6 +2292,138 @@ function DrawerRow({ icon, label, value }: { icon: string; label: string; value:
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.07em' }}>{label}</div>
         <div style={{ fontSize: 13, color: '#0F172A', marginTop: 1, wordBreak: 'break-word' }}>{value}</div>
+      </div>
+    </div>
+  )
+}
+
+// ── Phone input with country selector ─────────────────────────────────────────
+
+function PhoneInput({ value, onChange, inputStyle, labelStyle }: {
+  value: string
+  onChange: (full: string) => void
+  inputStyle?: React.CSSProperties
+  labelStyle?: React.CSSProperties
+}) {
+  const initCountry = phoneParseCountry(value)
+  const [country, setCountry] = useState<Country>(initCountry)
+  const [local, setLocal] = useState(phoneParseLocal(value, initCountry))
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const dropRef = React.useRef<HTMLDivElement>(null)
+
+  React.useEffect(() => {
+    const c = phoneParseCountry(value)
+    setCountry(c)
+    setLocal(phoneParseLocal(value, c))
+  }, [value])
+
+  React.useEffect(() => {
+    if (!open) return
+    function onClickOut(e: MouseEvent) {
+      if (dropRef.current && !dropRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClickOut)
+    return () => document.removeEventListener('mousedown', onClickOut)
+  }, [open])
+
+  function selectCountry(c: Country) {
+    setCountry(c)
+    setSearch('')
+    setOpen(false)
+    onChange(local.trim() ? `${c.dial} ${local.trim()}` : '')
+  }
+
+  function handleLocalChange(v: string) {
+    setLocal(v)
+    onChange(v.trim() ? `${country.dial} ${v.trim()}` : '')
+  }
+
+  const filtered = search
+    ? COUNTRIES.filter(c =>
+        c.name.toLowerCase().includes(search.toLowerCase()) ||
+        c.dial.includes(search) ||
+        c.iso.toLowerCase().includes(search.toLowerCase())
+      )
+    : COUNTRIES
+
+  const baseInput: React.CSSProperties = {
+    width: '100%', padding: '7px 10px', borderRadius: 6, border: '1px solid #E2E8F0',
+    fontSize: 13, outline: 'none', background: '#F8FAFC', color: '#0F172A', boxSizing: 'border-box',
+    ...inputStyle,
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+      {/* Country selector */}
+      <div style={{ position: 'relative', flexShrink: 0 }} ref={dropRef}>
+        <button
+          type="button"
+          onClick={() => { setOpen(o => !o); setSearch('') }}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 4, padding: '7px 8px',
+            border: '1px solid #E2E8F0', borderRadius: 6, background: '#F8FAFC',
+            cursor: 'pointer', fontSize: 13, color: '#0F172A', whiteSpace: 'nowrap',
+            height: 34,
+          }}
+        >
+          <span style={{ fontSize: 16 }}>{country.flag}</span>
+          <span style={{ color: '#64748B', fontSize: 12 }}>{country.dial}</span>
+          <svg viewBox="0 0 20 20" fill="currentColor" width={10} height={10} style={{ color: '#94A3B8' }}>
+            <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd"/>
+          </svg>
+        </button>
+
+        {open && (
+          <div style={{
+            position: 'absolute', top: '100%', left: 0, zIndex: 9999, marginTop: 2,
+            background: '#fff', border: '1px solid #E2E8F0', borderRadius: 8,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.12)', width: 240, overflow: 'hidden',
+          }}>
+            <div style={{ padding: '6px 8px', borderBottom: '1px solid #F1F5F9' }}>
+              <input
+                autoFocus
+                type="text"
+                placeholder="Buscar país o código…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                style={{ ...baseInput, padding: '5px 8px', fontSize: 12 }}
+              />
+            </div>
+            <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+              {filtered.length === 0
+                ? <div style={{ padding: '10px 12px', fontSize: 12, color: '#94A3B8' }}>Sin resultados</div>
+                : filtered.map(c => (
+                  <button
+                    key={c.iso}
+                    type="button"
+                    onClick={() => selectCountry(c)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                      padding: '7px 12px', border: 'none', background: c.iso === country.iso ? '#EEF2FF' : 'transparent',
+                      cursor: 'pointer', textAlign: 'left', fontSize: 13,
+                    }}
+                  >
+                    <span style={{ fontSize: 16, flexShrink: 0 }}>{c.flag}</span>
+                    <span style={{ flex: 1, color: '#0F172A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+                    <span style={{ color: '#94A3B8', fontSize: 11, flexShrink: 0 }}>{c.dial}</span>
+                  </button>
+                ))
+              }
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Local number */}
+      <div style={{ flex: 1 }}>
+        <input
+          type="tel"
+          value={local}
+          onChange={e => handleLocalChange(e.target.value)}
+          placeholder="600 000 000"
+          style={baseInput}
+        />
       </div>
     </div>
   )
@@ -1763,7 +2508,7 @@ function MemberModal({ title, form, setForm, err, onSubmit, onCancel, submitLabe
               </div>
               <div style={{ ...s.formField, flex: 1 }}>
                 <label style={s.formLabel}>Teléfono</label>
-                <input style={s.formInput} type="tel" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+34 600 000 000" />
+                <PhoneInput value={form.phone} onChange={v => setForm(f => ({ ...f, phone: v }))} inputStyle={s.formInput} />
               </div>
             </div>
           </div>

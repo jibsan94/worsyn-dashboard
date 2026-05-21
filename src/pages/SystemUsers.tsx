@@ -198,8 +198,16 @@ export default function SystemUsers() {
               <table className="su-table">
                 <thead>
                   <tr>
-                    {['Usuario', 'Email', 'Nombre', 'Rol', 'Estado', 'Último acceso', ''].map(h => (
-                      <th key={h}>{h}</th>
+                    {[
+                      { label: 'Usuario', cls: '' },
+                      { label: 'Email', cls: 'su-hide-mobile' },
+                      { label: 'Nombre', cls: 'su-hide-mobile' },
+                      { label: 'Rol', cls: '' },
+                      { label: 'Estado', cls: 'su-hide-mobile' },
+                      { label: 'Último acceso', cls: 'su-hide-mobile' },
+                      { label: '', cls: '' },
+                    ].map(h => (
+                      <th key={h.label} className={h.cls}>{h.label}</th>
                     ))}
                   </tr>
                 </thead>
@@ -212,11 +220,11 @@ export default function SystemUsers() {
                         {u.must_change_password && <span className="tag t-warn" style={{ marginLeft: 6, fontSize: 10 }}>Cred. pendiente</span>}
                         {u.two_factor_enabled && <span className="tag t-ok" style={{ marginLeft: 6, fontSize: 10 }}>2FA</span>}
                       </td>
-                      <td className="su-muted">{u.email}</td>
-                      <td className="su-muted">{u.full_name ?? '—'}</td>
+                      <td className="su-muted su-hide-mobile">{u.email}</td>
+                      <td className="su-muted su-hide-mobile">{u.full_name ?? '—'}</td>
                       <td><span className={`tag ${ROLE_TAG[u.role] ?? 't-info'}`}>{ROLE_LABEL[u.role] ?? u.role}</span></td>
-                      <td><span className={`tag ${u.is_active ? 't-ok' : 't-free'}`}>{u.is_active ? 'Activo' : 'Inactivo'}</span></td>
-                      <td className="su-muted su-nowrap">
+                      <td className="su-hide-mobile"><span className={`tag ${u.is_active ? 't-ok' : 't-free'}`}>{u.is_active ? 'Activo' : 'Inactivo'}</span></td>
+                      <td className="su-muted su-nowrap su-hide-mobile">
                         {u.last_login_at
                           ? new Date(u.last_login_at).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })
                           : '—'}

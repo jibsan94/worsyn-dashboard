@@ -20,7 +20,9 @@ import SettingsEmailPage from './pages/SettingsEmail'
 import SettingsIntegrationsPage from './pages/SettingsIntegrations'
 import SettingsRolesPage from './pages/SettingsRoles'
 import TenantPortalPage from './pages/TenantPortal'
+import TenantLoginPage from './pages/TenantLogin'
 import SystemLogsPage from './pages/SystemLogs'
+import CookieBanner from './components/CookieBanner'
 
 export default function App() {
   return (
@@ -28,7 +30,10 @@ export default function App() {
       <Routes>
         {/* Public */}
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/portal" element={<TenantLoginPage />} />
         <Route path="/portal/:slug" element={<TenantPortalPage />} />
+        <Route path="/portal/:slug/:module" element={<TenantPortalPage />} />
+        <Route path="/portal/:slug/:module/:tab" element={<TenantPortalPage />} />
 
         {/* Protected — requires auth */}
         <Route element={<ProtectedRoute />}>
@@ -64,6 +69,7 @@ export default function App() {
           </Route>
         </Route>
       </Routes>
+      <CookieBanner />
     </BrowserRouter>
   )
 }

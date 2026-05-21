@@ -62,6 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function clearSession() {
+    fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {})
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
     setToken(null)

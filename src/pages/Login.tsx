@@ -48,6 +48,7 @@ export default function Login() {
   async function completeLogin(accessToken: string, mustChangePwd: boolean) {
     const meRes = await fetch(`${API}/auth/me`, {
       headers: { Authorization: `Bearer ${accessToken}` },
+      credentials: 'include',
     })
     const me = await meRes.json()
     setSession(accessToken, {
@@ -72,6 +73,7 @@ export default function Login() {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({ username, password }).toString(),
+        credentials: 'include',
       })
       const data = await res.json()
       if (!res.ok) { setError(data.detail ?? 'Error al iniciar sesión'); return }
@@ -99,6 +101,7 @@ export default function Login() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ partial_token: partialToken, totp_code: totpCode }),
+        credentials: 'include',
       })
       const data = await res.json()
       if (!res.ok) { setError(data.detail ?? 'Código incorrecto'); return }

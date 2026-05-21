@@ -255,7 +255,7 @@ export default function SettingsRoles() {
             </div>
             {createErr && <div className="banner banner--error" style={{ margin: '12px 20px 0' }}>{createErr}</div>}
             <form className="modal-body" onSubmit={handleCreate}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
                 <div className="form-field">
                   <label>Slug <span style={{ color: 'var(--c-error)' }}>*</span></label>
                   <input type="text" placeholder="worship_leader" value={createForm.slug}
