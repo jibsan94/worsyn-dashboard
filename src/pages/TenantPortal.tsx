@@ -13,7 +13,7 @@ type TModule      = 'principal' | 'servicios' | 'miembros' | 'equipos' | 'partit
 type MiembrosTab   = 'dashboard' | 'miembros' | 'flujos' | 'formularios'
 type ServiciosTab  = 'mi-planificacion' | 'servicios' | 'canciones' | 'media' | 'personas'
 type MiembrosView = 'todas' | 'ministerio' | 'nuevos'
-type OrgRole      = 'admin' | 'lider' | 'miembro'
+type OrgRole      = 'admin' | 'leader' | 'member'
 type SettingsTab  = 'general' | 'ministerios' | 'roles' | 'admins' | 'integraciones' | 'facturacion'
 
 interface Person {
@@ -341,6 +341,9 @@ export default function TenantPortal() {
   const [attUploadErr, setAttUploadErr]       = useState<string | null>(null)
   const [attPreview, setAttPreview]           = useState<{ label: string; mime: string; data: string } | null>(null)
   const attFileRef = useRef<HTMLInputElement>(null)
+  // Files queued in the "create member" modal — uploaded after member is created
+  interface PendingFile { file: File; label: string }
+  const [addPendingFiles, setAddPendingFiles] = useState<PendingFile[]>([])
 
   // ── Settings (URL-driven for module === 'configuracion')
   const settingsTab = settingsTabFromUrl
@@ -376,7 +379,7 @@ export default function TenantPortal() {
   const iconInputRef = useRef<HTMLInputElement>(null)
   const profileAvatarRef = useRef<HTMLInputElement>(null)
 
-  const canEdit = userRole === 'admin' || userRole === 'lider'
+  const canEdit = userRole === 'admin' || userRole === 'leader'
 
   function authHeaders(): Record<string, string> {
     return apiToken
@@ -576,7 +579,15 @@ export default function TenantPortal() {
     if (!res.ok) { setFormErr('Error al guardar. Inténtalo de nuevo.'); return }
     const created: ApiMember = await res.json()
     setMembers(prev => [apiToPerson(created, 0), ...prev.map((p, i) => ({ ...p, color: pickColor(i + 1) }))])
-    setAddOpen(false); setForm(EMPTY_FORM); setFormErr(null)
+    // Upload any queued attachments
+    const h: Record<string, string> = apiToken ? { Authorization: `Bearer ${apiToken}` } : {}
+    for (const pf of addPendingFiles) {
+      const fd = new FormData()
+      fd.append('file', pf.file)
+      fd.append('label', pf.label)
+      await fetchApi(`/api/v1/tenant/${slug}/members/${created.id}/attachments`, { method: 'POST', headers: h, body: fd })
+    }
+    setAddOpen(false); setForm(EMPTY_FORM); setFormErr(null); setAddPendingFiles([])
   }
 
   function openEdit(p: Person) {
@@ -922,7 +933,7 @@ export default function TenantPortal() {
                       ...(isActive ? s.tabBtnActive : {}),
                       ...(isHovered && !isActive ? { background: C.soft, color: C.text } : {}),
                     }}
-                    onClick={() => setMiembrosTab(tab)}
+                    onClick={() => { setMiembrosTab(tab); if (tab === 'miembros') { setSelectedMember(null); setIsEditingMember(false); setEditTarget(null); setEditErr(null); } }}
                     onMouseEnter={() => setHoveredTab(tab)}
                     onMouseLeave={() => setHoveredTab(null)}>
                     {tab === 'dashboard' ? 'Dashboard' : tab === 'miembros' ? 'Miembros' : tab === 'flujos' ? 'Flujos' : 'Formularios'}
@@ -1683,42 +1694,18 @@ export default function TenantPortal() {
                         </thead>
                         <tbody>
                           {attachments.map(att => (
-                            <tr key={att.id}>
-                              <td style={{ padding: '10px 16px', borderBottom: `1px solid ${C.soft}`, fontSize: 13, fontWeight: 600, color: C.text }}>{att.label}</td>
-                              <td style={{ padding: '10px 16px', borderBottom: `1px solid ${C.soft}`, fontSize: 12, color: C.muted, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{att.original_name}</td>
-                              <td style={{ padding: '10px 16px', borderBottom: `1px solid ${C.soft}`, fontSize: 12, color: C.muted, whiteSpace: 'nowrap' }}>{(att.size_bytes / 1024).toFixed(0)} KB</td>
-                              <td style={{ padding: '10px 16px', borderBottom: `1px solid ${C.soft}`, fontSize: 12, color: C.muted, whiteSpace: 'nowrap' }}>{new Date(att.uploaded_at).toLocaleDateString('es-ES')}</td>
-                              <td style={{ padding: '10px 16px', borderBottom: `1px solid ${C.soft}` }}>
-                                {canEdit && (
-                                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                                    <button
-                                      style={{ fontSize: 12, padding: '4px 10px', border: `1px solid ${C.border}`, borderRadius: 6, background: 'none', cursor: 'pointer', color: C.primary, fontWeight: 600 }}
-                                      onClick={() => previewAttachment(att)}>
-                                      Vista previa
-                                    </button>
-                                    <button
-                                      style={{ fontSize: 12, padding: '4px 10px', border: `1px solid ${C.border}`, borderRadius: 6, background: 'none', cursor: 'pointer', color: C.muted }}
-                                      onClick={async () => {
-                                        if (!selectedMember) return
-                                        const res = await fetchApi(`/api/v1/tenant/${slug}/members/${selectedMember.id}/attachments/${att.id}/data`, { headers: attAuthHeaders() })
-                                        if (!res.ok) return
-                                        const j = await res.json()
-                                        const a = document.createElement('a')
-                                        a.href = `data:${j.mime_type};base64,${j.file_data}`
-                                        a.download = j.original_name
-                                        a.click()
-                                      }}>
-                                      Descargar
-                                    </button>
-                                    <button
-                                      style={{ fontSize: 12, padding: '4px 10px', border: '1px solid rgba(239,68,68,.3)', borderRadius: 6, background: 'none', cursor: 'pointer', color: C.danger }}
-                                      onClick={() => deleteAttachment(att.id)}>
-                                      Eliminar
-                                    </button>
-                                  </div>
-                                )}
-                              </td>
-                            </tr>
+                            <AttachmentRow
+                              key={att.id}
+                              att={att}
+                              canEdit={canEdit}
+                              slug={slug!}
+                              memberId={selectedMember.id}
+                              authHeaders={attAuthHeaders}
+                              onPreview={() => previewAttachment(att)}
+                              onDelete={() => deleteAttachment(att.id)}
+                              onRenamed={(id, label) => setAttachments(prev => prev.map(a => a.id === id ? { ...a, label } : a))}
+                              fetchApi={fetchApi}
+                            />
                           ))}
                         </tbody>
                       </table>
@@ -2166,11 +2153,13 @@ export default function TenantPortal() {
           setForm={setForm}
           err={formErr}
           onSubmit={handleAddMember}
-          onCancel={() => { setAddOpen(false); setForm(EMPTY_FORM); setFormErr(null) }}
+          onCancel={() => { setAddOpen(false); setForm(EMPTY_FORM); setFormErr(null); setAddPendingFiles([]) }}
           submitLabel="Guardar miembro"
           onToggleRole={role => toggleRole(role, form, setForm)}
           ministries={effectiveMinistries}
           predefinedRoles={effectiveRoles}
+          pendingFiles={addPendingFiles}
+          setPendingFiles={setAddPendingFiles}
         />
       )}
 
@@ -2431,7 +2420,96 @@ function PhoneInput({ value, onChange, inputStyle, labelStyle }: {
 
 // ── Member modal (shared add/edit) ────────────────────────────────────────────
 
-function MemberModal({ title, form, setForm, err, onSubmit, onCancel, submitLabel, onToggleRole, ministries, predefinedRoles }: {
+// ── Attachment row with inline rename ────────────────────────────────────────
+
+function AttachmentRow({ att, canEdit, slug, memberId, authHeaders, onPreview, onDelete, onRenamed, fetchApi }: {
+  att: { id: string; label: string; original_name: string; mime_type: string; size_bytes: number; uploaded_at: string }
+  canEdit: boolean
+  slug: string
+  memberId: string
+  authHeaders: () => Record<string, string>
+  onPreview: () => void
+  onDelete: () => void
+  onRenamed: (id: string, label: string) => void
+  fetchApi: (url: string, init?: RequestInit) => Promise<Response>
+}) {
+  const [editing, setEditing] = React.useState(false)
+  const [draft, setDraft]     = React.useState(att.label)
+  const [saving, setSaving]   = React.useState(false)
+  const inputRef = React.useRef<HTMLInputElement>(null)
+
+  function startEdit() { setDraft(att.label); setEditing(true); setTimeout(() => inputRef.current?.select(), 30) }
+
+  async function saveLabel() {
+    const trimmed = draft.trim()
+    if (!trimmed || trimmed === att.label) { setEditing(false); return }
+    setSaving(true)
+    const res = await fetchApi(`/api/v1/tenant/${slug}/members/${memberId}/attachments/${att.id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: trimmed }),
+    })
+    if (res.ok) onRenamed(att.id, trimmed)
+    setSaving(false); setEditing(false)
+  }
+
+  const tdBase: React.CSSProperties = { padding: '10px 16px', borderBottom: `1px solid ${C.soft}` }
+  return (
+    <tr>
+      <td style={{ ...tdBase, minWidth: 160 }}>
+        {editing ? (
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            <input
+              ref={inputRef}
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') saveLabel(); if (e.key === 'Escape') setEditing(false) }}
+              style={{ border: `1.5px solid ${C.primary}`, borderRadius: 6, padding: '3px 7px', fontSize: 13, outline: 'none', flex: 1, minWidth: 0 }}
+              disabled={saving}
+            />
+            <button onClick={saveLabel} disabled={saving}
+              style={{ background: C.primary, border: 'none', borderRadius: 5, color: '#fff', cursor: 'pointer', padding: '3px 8px', fontSize: 12, fontWeight: 600 }}>
+              {saving ? '…' : '✓'}
+            </button>
+            <button onClick={() => setEditing(false)}
+              style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 5, cursor: 'pointer', padding: '3px 7px', fontSize: 12, color: C.muted }}>
+              ✕
+            </button>
+          </div>
+        ) : (
+          <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{att.label}</span>
+        )}
+      </td>
+      <td style={{ ...tdBase, fontSize: 12, color: C.muted, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{att.original_name}</td>
+      <td style={{ ...tdBase, fontSize: 12, color: C.muted, whiteSpace: 'nowrap' }}>{(att.size_bytes / 1024).toFixed(0)} KB</td>
+      <td style={{ ...tdBase, fontSize: 12, color: C.muted, whiteSpace: 'nowrap' }}>{new Date(att.uploaded_at).toLocaleDateString('es-ES')}</td>
+      <td style={tdBase}>
+        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+          <button style={{ fontSize: 12, padding: '5px 12px', border: `1px solid ${C.border}`, borderRadius: 6, background: 'none', cursor: 'pointer', color: C.primary, fontWeight: 600 }}
+            onClick={onPreview}>Vista previa</button>
+          {canEdit && (<>
+            <button style={{ fontSize: 12, padding: '5px 12px', border: `1.5px solid ${C.primary}`, borderRadius: 6, background: C.primary, cursor: 'pointer', color: '#fff', fontWeight: 600 }}
+              onClick={startEdit}>Renombrar</button>
+            <button style={{ fontSize: 12, padding: '5px 12px', border: `1px solid ${C.border}`, borderRadius: 6, background: 'none', cursor: 'pointer', color: C.muted }}
+              onClick={async () => {
+                const res = await fetchApi(`/api/v1/tenant/${slug}/members/${memberId}/attachments/${att.id}/data`, { headers: authHeaders() })
+                if (!res.ok) return
+                const j = await res.json()
+                const a = document.createElement('a')
+                a.href = `data:${j.mime_type};base64,${j.file_data}`
+                a.download = j.original_name
+                a.click()
+              }}>Descargar</button>
+            <button style={{ fontSize: 12, padding: '5px 12px', border: '1px solid rgba(239,68,68,.3)', borderRadius: 6, background: 'none', cursor: 'pointer', color: C.danger }}
+              onClick={onDelete}>Eliminar</button>
+          </>)}
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+function MemberModal({ title, form, setForm, err, onSubmit, onCancel, submitLabel, onToggleRole, ministries, predefinedRoles, pendingFiles, setPendingFiles }: {
   title: string
   form: MemberForm
   setForm: React.Dispatch<React.SetStateAction<MemberForm>>
@@ -2442,7 +2520,22 @@ function MemberModal({ title, form, setForm, err, onSubmit, onCancel, submitLabe
   onToggleRole: (role: string) => void
   ministries: string[]
   predefinedRoles: string[]
+  pendingFiles?: { file: File; label: string }[]
+  setPendingFiles?: React.Dispatch<React.SetStateAction<{ file: File; label: string }[]>>
 }) {
+  const [pendingLabel, setPendingLabel] = React.useState('')
+  const [pendingErr, setPendingErr]     = React.useState<string | null>(null)
+  const pendingFileRef = React.useRef<HTMLInputElement>(null)
+
+  function handleFilePick(file: File | null) {
+    if (!file) return
+    if (file.size > 10 * 1024 * 1024) { setPendingErr('Máximo 10 MB'); return }
+    const label = pendingLabel.trim() || file.name.replace(/\.[^.]+$/, '')
+    setPendingFiles?.(prev => [...prev, { file, label }])
+    setPendingLabel(''); setPendingErr(null)
+    if (pendingFileRef.current) pendingFileRef.current.value = ''
+  }
+
   return (
     <div style={s.overlay} onClick={e => { if (e.target === e.currentTarget) onCancel() }}>
       <div style={s.modal}>
@@ -2561,6 +2654,51 @@ function MemberModal({ title, form, setForm, err, onSubmit, onCancel, submitLabe
             </div>
           </div>
 
+          {/* Documentos adjuntos (solo al crear) */}
+          {setPendingFiles && (
+            <div style={s.formSection}>
+              <div style={s.formSectionTitle}>Documentos adjuntos</div>
+
+              {/* Queue list */}
+              {(pendingFiles ?? []).length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
+                  {(pendingFiles ?? []).map((pf, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 8, padding: '6px 10px' }}>
+                      <svg viewBox="0 0 16 16" fill="#4F46E5" width={13} height={13}><path fillRule="evenodd" d="M4 1a1 1 0 00-1 1v12a1 1 0 001 1h8a1 1 0 001-1V6.414A1 1 0 0012.707 6L9 2.293A1 1 0 008.586 2H4zm4 1.414L11.586 6H8V2.414zM5 9a1 1 0 000 2h6a1 1 0 100-2H5z" clipRule="evenodd"/></svg>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: '#3730A3', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pf.label}</span>
+                      <span style={{ fontSize: 11, color: '#6366F1' }}>{(pf.file.size / 1024).toFixed(0)} KB</span>
+                      <button type="button" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#818CF8', fontSize: 14, lineHeight: 1, padding: 2 }}
+                        onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add file row — auto-queues on file pick */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <input
+                  style={{ ...s.formInput, fontSize: 13 }}
+                  placeholder="Nombre del documento (opcional — si lo dejas vacío se usa el nombre del archivo)"
+                  value={pendingLabel}
+                  onChange={e => setPendingLabel(e.target.value)}
+                />
+                <div
+                  style={{ border: `2px dashed ${C.border}`, borderRadius: 8, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', background: C.bg }}
+                  onClick={() => pendingFileRef.current?.click()}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => { e.preventDefault(); handleFilePick(e.dataTransfer.files[0] ?? null) }}>
+                  <input ref={pendingFileRef} type="file" style={{ display: 'none' }} onChange={e => handleFilePick(e.target.files?.[0] ?? null)} />
+                  <svg viewBox="0 0 16 16" fill={C.light} width={14} height={14}><path fillRule="evenodd" d="M4 1a1 1 0 00-1 1v12a1 1 0 001 1h8a1 1 0 001-1V6.414A1 1 0 0012.707 6L9 2.293A1 1 0 008.586 2H4zm4 1.414L11.586 6H8V2.414z" clipRule="evenodd"/></svg>
+                  <span style={{ fontSize: 13, color: C.muted }}>
+                    Arrastra o haz clic para añadir un documento — PDF, imágenes, docs (máx. 10 MB)
+                  </span>
+                </div>
+              </div>
+              {pendingErr && <p style={{ fontSize: 12, color: C.danger, margin: 0 }}>{pendingErr}</p>}
+              <p style={{ fontSize: 11, color: C.light, margin: 0 }}>Los documentos se subirán al guardar el miembro.</p>
+            </div>
+          )}
+
           <div style={s.modalFoot}>
             <button type="button" style={s.btnGhost} onClick={onCancel}>Cancelar</button>
             <button type="submit" style={s.btnPrimary}>{submitLabel}</button>
@@ -2644,7 +2782,7 @@ const s: Record<string, React.CSSProperties> = {
   mainTitle: { fontSize: 20, fontWeight: 700, color: C.text, margin: 0 },
   mainSub:   { fontSize: 13, color: C.light, margin: '3px 0 0' },
 
-  backBtn:    { display: 'inline-flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 700, color: C.light, letterSpacing: '0.06em', padding: '0 0 2px', textTransform: 'uppercase' } as React.CSSProperties,
+  backBtn:    { display: 'inline-flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: '0.06em', padding: '0 0 2px', textTransform: 'uppercase' } as React.CSSProperties,
   btnPrimary: { display: 'flex', alignItems: 'center', gap: 6, background: C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
   btnGhost:   { display: 'flex', alignItems: 'center', gap: 6, background: 'transparent', color: C.muted, border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 14px', fontSize: 13, fontWeight: 500, cursor: 'pointer' },
 
