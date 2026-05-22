@@ -265,6 +265,7 @@ function storageKey(slug: string, kind: 'token' | 'user') {
 interface TenantSession {
   id: string; email: string; full_name: string | null
   role: string; org_id: string; org_name: string; org_slug: string; avatar?: string | null
+  accessible_modules?: string[]; service_role?: string | null
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -274,7 +275,7 @@ export default function TenantPortal() {
   const navigate = useNavigate()
 
   const VALID_MODULES: TModule[] = ['principal','servicios','miembros','equipos','partituras','eventos','ensayos','calendario','finanzas','configuracion','perfil']
-  const moduleFromUrl: TModule = (VALID_MODULES.includes(urlModule as TModule) ? urlModule : 'miembros') as TModule
+  const moduleFromUrl: TModule = (VALID_MODULES.includes(urlModule as TModule) ? urlModule as TModule : 'miembros')
 
   // ── Core state
   const [org, setOrg]             = useState<OrgInfo | null>(null)
@@ -288,6 +289,7 @@ export default function TenantPortal() {
   const [userId, setUserId]       = useState<string | null>(null)
   const [userAvatar, setUserAvatar] = useState<string | null>(null)
   const [apiToken, setApiToken]   = useState<string | null>(null)
+  const [accessibleModules, setAccessibleModules] = useState<TModule[] | null>(null)
 
   // ── Module & navigation (URL-driven — refresh keeps you on current module)
   const module: TModule = moduleFromUrl
@@ -416,6 +418,7 @@ export default function TenantPortal() {
           setUserAvatar(session.avatar ?? null)
           setUserName(session.full_name?.split(' ')[0] ?? session.email.split('@')[0])
           setUserRole(session.role as OrgRole)
+          setAccessibleModules((session.accessible_modules as TModule[] | undefined) ?? null)
           setScreen('app')
           fetchSwitchOptionsFor(slug, storedToken)
           return
@@ -435,6 +438,16 @@ export default function TenantPortal() {
     document.addEventListener('mousedown', h)
     return () => document.removeEventListener('mousedown', h)
   }, [dropOpen])
+
+  // Redirect if the user tries to access a module outside their accessible_modules.
+  // Admins/leaders always get all modules from the server. Members-only-in-Services
+  // get ['servicios','perfil'] — they land on servicios by default.
+  useEffect(() => {
+    if (!accessibleModules || accessibleModules.length === 0) return
+    if (!accessibleModules.includes(module)) {
+      navigate(`/portal/${slug}/${accessibleModules[0]}`, { replace: true })
+    }
+  }, [accessibleModules, module, slug, navigate])
 
   useEffect(() => {
     if (!logoutOpen) return
@@ -480,6 +493,7 @@ export default function TenantPortal() {
     setUserAvatar(session.avatar ?? null)
     setUserName(session.full_name?.split(' ')[0] ?? session.email.split('@')[0])
     setUserRole(session.role as OrgRole)
+    setAccessibleModules((session.accessible_modules as TModule[] | undefined) ?? null)
     setLoggingIn(false)
     setScreen('app')
     fetchSwitchOptionsFor(slug, data.access_token)
@@ -881,7 +895,7 @@ export default function TenantPortal() {
           {dropOpen && (
             <div style={s.dropdown}>
               <div style={s.dropSection}>
-                {MODULES.map(m => (
+                {MODULES.filter(m => !accessibleModules || accessibleModules.includes(m.id)).map(m => (
                   <button key={m.id} style={{ ...s.dropItem, ...(m.id === module ? s.dropItemActive : {}) }}
                     onClick={() => switchModule(m.id)}
                     onMouseEnter={e => { if (m.id !== module) e.currentTarget.style.background = C.soft }}
