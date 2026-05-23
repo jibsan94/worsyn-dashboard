@@ -879,9 +879,63 @@ interface ServicePerson {
   welcomed_at: string | null
   password_set: boolean
   scheduling?: { max_per_month: number | null; max_per_day: number | null }
+  signature?: { text: string | null; image: string | null }
+  preferred_notif_app?: 'servicios' | 'worsyn'
   temp_password?: string
   debug_password?: string | null   // TEST-ONLY — remove before prod
 }
+
+type EmailKind = 'general' | 'schedule' | 'signup' | 'welcome'
+interface EmailTemplate {
+  id: string; kind: EmailKind; name: string; subject: string; body: string;
+  is_default: boolean; created_at: string; updated_at: string | null
+}
+interface EmailMessage {
+  id: string; direction: 'sent' | 'received'; status: string;
+  subject: string; body: string;
+  recipient_email: string; sender_email: string | null;
+  recipient_member_id: string | null; sender_member_id: string | null;
+  template_id: string | null;
+  sent_at: string | null; created_at: string; error: string | null;
+  counterparty_name: string | null;
+}
+
+const KIND_LABEL: Record<EmailKind, string> = {
+  general: 'General', schedule: 'Programación', signup: 'Hojas de inscripción', welcome: 'Bienvenida',
+}
+const KIND_HINT: Record<EmailKind, string> = {
+  general: 'Mensajes generales (no asociados a un plan o fecha).',
+  schedule: 'Asociados a planes o al cuadrante. Llevan botones de Aceptar / Rechazar.',
+  signup: 'Para hojas de inscripción y reclutamiento.',
+  welcome: 'Bienvenida al portal — se envía al añadir una persona nueva.',
+}
+
+// Common variables exposed by the picker. Full catalog → artifacts/EMAIL-VARIABLES.md
+const VARIABLE_GROUPS: { label: string; vars: { token: string; hint: string }[] }[] = [
+  { label: 'Destinatario', vars: [
+    { token: '{{ to.name }}', hint: 'Nombre completo de la persona' },
+    { token: '{{ to.first_name }}', hint: 'Solo el primer nombre' },
+    { token: '{{ to.last_name }}', hint: 'Primer apellido' },
+    { token: '{{ to.email }}', hint: 'Correo electrónico' },
+    { token: '{{ to.service_role }}', hint: 'Rol en Servicios (texto en ES)' },
+    { token: '{{ to.max_plan_permissions_s }}', hint: 'Alias compatible PCO (= service_role)' },
+    { token: '{{ to.login_method }}', hint: 'Método de inicio de sesión' },
+  ]},
+  { label: 'Remitente', vars: [
+    { token: '{{ from.name }}', hint: 'Nombre del remitente' },
+    { token: '{{ from.first_name }}', hint: 'Primer nombre del remitente' },
+    { token: '{{ from.signature }}', hint: 'Firma configurada del remitente' },
+  ]},
+  { label: 'Organización', vars: [
+    { token: '{{ organization.name }}', hint: 'Nombre de la iglesia' },
+    { token: '{{ organization.alias }}', hint: 'Alias del portal' },
+    { token: '{{ organization.email }}', hint: 'Email de contacto de la organización' },
+  ]},
+  { label: 'Condicionales', vars: [
+    { token: '{% if to.has_password %}...{% else %}...{% endif %}', hint: 'Bloque solo si la persona ya tiene contraseña' },
+    { token: '{% if to.scheduler_at_all? %}...{% endif %}', hint: 'Bloque solo si puede coordinar/programar' },
+  ]},
+]
 
 interface PersonTeam { membership_id: string; team_id: string; team_name: string; team_color: string | null; role: string | null }
 
@@ -1523,6 +1577,512 @@ function BlockoutModal({ slug, smId, initial, onSaved, onClose }: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Shared presentational primitives. MUST be module-level (not defined inside
+// a parent component) — otherwise React sees a new component type on every
+// render and unmounts/remounts the subtree (steals focus from inputs).
+// ─────────────────────────────────────────────────────────────────────────────
+function SectionTitle({ children, hint, right }: { children: React.ReactNode; hint?: string; right?: React.ReactNode }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+      <h3 style={{ fontSize: 15, fontWeight: 700, color: C.text, margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+        {children}
+        {hint && <span title={hint} style={{ color: C.light, cursor: 'help', fontSize: 12 }}>ⓘ</span>}
+      </h3>
+      {right}
+    </div>
+  )
+}
+function Card({ children, padded = true }: { children: React.ReactNode; padded?: boolean }) {
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: padded ? '16px 18px' : 0 }}>{children}</div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Email helpers: variable picker, compose modal, templates manager
+// ─────────────────────────────────────────────────────────────────────────────
+function VariablePicker({ onInsert, anchorRight = false, allowedGroups }: {
+  onInsert: (tok: string) => void
+  anchorRight?: boolean
+  allowedGroups?: string[]  // restrict to these group labels (e.g. ['Destinatario', 'Organización'])
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const ref = React.useRef<HTMLDivElement>(null)
+  const searchRef = React.useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [open])
+  useEffect(() => { if (open) setTimeout(() => searchRef.current?.focus(), 30) }, [open])
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return VARIABLE_GROUPS
+      .filter(g => !allowedGroups || allowedGroups.includes(g.label))
+      .map(g => ({
+        ...g,
+        vars: g.vars.filter(v => !q || v.token.toLowerCase().includes(q) || v.hint.toLowerCase().includes(q)),
+      }))
+      .filter(g => g.vars.length > 0)
+  }, [search, allowedGroups])
+  const totalShown = filtered.reduce((n, g) => n + g.vars.length, 0)
+
+  return (
+    <div ref={ref} style={{ position: 'relative', display: 'inline-flex' }}>
+      <button type="button" onClick={() => setOpen(o => !o)}
+        style={{ ...s.btnGhost, fontSize: 12, padding: '4px 10px', display: 'inline-flex', gap: 4 }}>
+        {'{}'} Variable
+      </button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', [anchorRight ? 'right' : 'left']: 0, zIndex: 300,
+          background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.12)',
+          width: 340, maxHeight: 420, display: 'flex', flexDirection: 'column',
+        }}>
+          <div style={{ padding: '8px 8px 6px', borderBottom: `1px solid ${C.border}` }}>
+            <input ref={searchRef} type="text" placeholder="Buscar variable…" value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{ ...s.input, padding: '6px 10px', fontSize: 12 }} />
+          </div>
+          <div style={{ overflowY: 'auto', flex: 1, padding: 6 }}>
+            {totalShown === 0 && (
+              <div style={{ padding: '20px 10px', fontSize: 12, color: C.muted, textAlign: 'center' }}>
+                Sin resultados. Prueba con <code>to</code>, <code>org</code> o <code>signature</code>.
+              </div>
+            )}
+            {filtered.map(g => (
+              <div key={g.label} style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: C.light, textTransform: 'uppercase', letterSpacing: '0.07em', padding: '6px 10px 4px' }}>{g.label}</div>
+                {g.vars.map(v => (
+                  <button key={v.token} onClick={() => { onInsert(v.token); setOpen(false); setSearch('') }}
+                    style={{ display: 'block', width: '100%', padding: '7px 10px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', borderRadius: 6 }}
+                    onMouseEnter={e => e.currentTarget.style.background = C.soft}
+                    onMouseLeave={e => e.currentTarget.style.background = 'none'}>
+                    <code style={{ fontSize: 12, fontFamily: 'monospace', color: C.primary }}>{v.token}</code>
+                    <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{v.hint}</div>
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+          <div style={{ borderTop: `1px solid ${C.border}`, padding: '8px 10px', fontSize: 11, color: C.muted }}>
+            Catálogo completo en <code>artifacts/EMAIL-VARIABLES.md</code>.
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RichTextEditor — contentEditable + toolbar. Output is HTML stored in DB.
+// Uses execCommand (deprecated but supported everywhere). For sanitization:
+// only admin/leader/coordinator/svc-editor can compose, so we trust the markup.
+// ─────────────────────────────────────────────────────────────────────────────
+const RICH_BTN: React.CSSProperties = {
+  background: 'none', border: 'none', cursor: 'pointer', color: C.muted,
+  padding: '4px 8px', fontSize: 13, borderRadius: 5, minWidth: 28, height: 28,
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+}
+const RICH_SEP: React.CSSProperties = { width: 1, alignSelf: 'stretch', background: C.border, margin: '4px 4px' }
+
+export interface RichTextEditorHandle { insert: (html: string) => void; focus: () => void }
+
+const RichTextEditor = React.forwardRef<RichTextEditorHandle, {
+  value: string
+  onChange: (html: string) => void
+  placeholder?: string
+  extraToolbar?: React.ReactNode  // e.g. the VariablePicker
+  minHeight?: number
+}>(function RichTextEditor({ value, onChange, placeholder, extraToolbar, minHeight = 200 }, ref) {
+  const editorRef = React.useRef<HTMLDivElement>(null)
+  const savedRangeRef = React.useRef<Range | null>(null)
+  // Mount-only innerHTML so React doesn't fight the caret on every keystroke.
+  useEffect(() => {
+    if (editorRef.current && editorRef.current.innerHTML !== value) {
+      editorRef.current.innerHTML = value || ''
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function saveSelection() {
+    const sel = window.getSelection()
+    if (!sel || sel.rangeCount === 0) return
+    const r = sel.getRangeAt(0)
+    if (editorRef.current && editorRef.current.contains(r.commonAncestorContainer)) {
+      savedRangeRef.current = r.cloneRange()
+    }
+  }
+  function restoreSelection() {
+    const r = savedRangeRef.current
+    const sel = window.getSelection()
+    if (!r || !sel) return
+    sel.removeAllRanges()
+    sel.addRange(r)
+  }
+  function exec(cmd: string, arg?: string) {
+    editorRef.current?.focus()
+    restoreSelection()
+    document.execCommand(cmd, false, arg)
+    if (editorRef.current) onChange(editorRef.current.innerHTML)
+    saveSelection()
+  }
+  function onInput(e: React.FormEvent<HTMLDivElement>) {
+    onChange((e.target as HTMLDivElement).innerHTML)
+    saveSelection()
+  }
+  function promptLink() {
+    saveSelection()
+    const url = window.prompt('URL del enlace (https://…)')
+    if (!url) return
+    exec('createLink', url)
+  }
+  function insertHTML(html: string) {
+    editorRef.current?.focus()
+    restoreSelection()
+    document.execCommand('insertHTML', false, html)
+    if (editorRef.current) onChange(editorRef.current.innerHTML)
+    saveSelection()
+  }
+
+  React.useImperativeHandle(ref, () => ({
+    insert: insertHTML,
+    focus: () => { editorRef.current?.focus(); restoreSelection() },
+  }), [])
+
+  return (
+    <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: '#fff' }}>
+      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', padding: 4, borderBottom: `1px solid ${C.border}`, gap: 1, background: C.bg, borderRadius: '8px 8px 0 0' }}
+        // Prevent toolbar buttons from stealing focus (and losing the selection).
+        onMouseDown={e => { saveSelection(); e.preventDefault() }}>
+        <button type="button" title="Negrita (Ctrl+B)" onClick={() => exec('bold')} style={{ ...RICH_BTN, fontWeight: 700 }}>B</button>
+        <button type="button" title="Cursiva (Ctrl+I)" onClick={() => exec('italic')} style={{ ...RICH_BTN, fontStyle: 'italic' }}>I</button>
+        <button type="button" title="Subrayado (Ctrl+U)" onClick={() => exec('underline')} style={{ ...RICH_BTN, textDecoration: 'underline' }}>U</button>
+        <span style={RICH_SEP} />
+        <select title="Estilo" onChange={e => { if (e.target.value) { exec('formatBlock', e.target.value); e.target.value = '' } }}
+          style={{ ...RICH_BTN, padding: '4px 6px', minWidth: 78, cursor: 'pointer' }}>
+          <option value="">Estilo</option>
+          <option value="h2">Título</option>
+          <option value="h3">Subtítulo</option>
+          <option value="p">Párrafo</option>
+        </select>
+        <span style={RICH_SEP} />
+        <button type="button" title="Lista" onClick={() => exec('insertUnorderedList')} style={RICH_BTN}>• ≡</button>
+        <button type="button" title="Lista numerada" onClick={() => exec('insertOrderedList')} style={RICH_BTN}>1.</button>
+        <span style={RICH_SEP} />
+        <button type="button" title="Alinear izquierda" onClick={() => exec('justifyLeft')} style={RICH_BTN}>⇤</button>
+        <button type="button" title="Centrar" onClick={() => exec('justifyCenter')} style={RICH_BTN}>↔</button>
+        <button type="button" title="Alinear derecha" onClick={() => exec('justifyRight')} style={RICH_BTN}>⇥</button>
+        <span style={RICH_SEP} />
+        <label title="Color del texto" style={{ ...RICH_BTN, padding: 0, cursor: 'pointer', position: 'relative' }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.primary, padding: '0 6px' }}>A</span>
+          <input type="color" onChange={e => exec('foreColor', e.target.value)}
+            style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
+        </label>
+        <button type="button" title="Insertar enlace" onClick={promptLink} style={RICH_BTN}>🔗</button>
+        <button type="button" title="Quitar formato" onClick={() => exec('removeFormat')} style={RICH_BTN}>Tₓ</button>
+        {extraToolbar && (<><span style={RICH_SEP} />{extraToolbar}</>)}
+      </div>
+      <div ref={editorRef} contentEditable suppressContentEditableWarning
+        onInput={onInput} onBlur={saveSelection} onKeyUp={saveSelection} onMouseUp={saveSelection}
+        data-placeholder={placeholder}
+        style={{
+          minHeight, padding: '12px 14px', outline: 'none', fontSize: 14, lineHeight: 1.6, color: C.text,
+          fontFamily: 'inherit',
+        }}
+      />
+    </div>
+  )
+})
+
+function ComposeEmailModal({ slug, defaultRecipient, onClose, onSent }: {
+  slug: string
+  defaultRecipient: ServicePerson
+  onClose: () => void
+  onSent: (sent: EmailMessage[]) => void
+}) {
+  const [templates, setTemplates] = useState<EmailTemplate[]>([])
+  const [tplId, setTplId] = useState<string>('')
+  const [subject, setSubject] = useState('')
+  const [body, setBody] = useState('')
+  const [preview, setPreview] = useState<{ subject: string; body: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [templatesOpen, setTemplatesOpen] = useState(false)
+  const bodyRef = React.useRef<RichTextEditorHandle>(null)
+  const subjectRef = React.useRef<HTMLInputElement>(null)
+  const [bodyKey, setBodyKey] = useState(0)   // bumps to remount editor when template applied
+
+  const reloadTemplates = useCallback(async () => {
+    const r = await api(`/api/v1/tenant/${slug}/email/templates`)
+    setTemplates(r.ok ? await r.json() : [])
+  }, [slug])
+  useEffect(() => { reloadTemplates() }, [reloadTemplates])
+
+  function applyTemplate(id: string) {
+    setTplId(id)
+    const t = templates.find(x => x.id === id)
+    if (t) { setSubject(t.subject); setBody(t.body); setBodyKey(k => k + 1) }
+  }
+  function insertIntoBody(tok: string) { bodyRef.current?.insert(tok) }
+  function insertIntoSubject(tok: string) {
+    const el = subjectRef.current
+    if (!el) { setSubject(s => s + tok); return }
+    const start = el.selectionStart ?? subject.length, end = el.selectionEnd ?? subject.length
+    setSubject(subject.slice(0, start) + tok + subject.slice(end))
+    setTimeout(() => { el.focus(); el.setSelectionRange(start + tok.length, start + tok.length) }, 0)
+  }
+
+  async function doPreview() {
+    setErr('')
+    const r = await api(`/api/v1/tenant/${slug}/email/messages/preview`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipient_member_id: defaultRecipient.member_id, subject, body }),
+    })
+    if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); return }
+    setPreview(await r.json())
+  }
+
+  async function send() {
+    setErr(''); setBusy(true)
+    const r = await api(`/api/v1/tenant/${slug}/email/messages`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipient_member_ids: [defaultRecipient.member_id],
+        template_id: tplId || null, subject, body,
+      }),
+    })
+    if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); setBusy(false); return }
+    onSent(await r.json())
+  }
+
+  return (
+    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div data-tp="wizard-modal" style={{ ...s.modal, width: 680 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h3 style={s.modalTitle}>Enviar correo</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: C.muted, lineHeight: 1 }}>✕</button>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <select style={{ ...s.select, flex: 1 }} value={tplId} onChange={e => applyTemplate(e.target.value)}>
+            <option value="">— Sin plantilla (empezar en blanco) —</option>
+            {templates.map(t => (
+              <option key={t.id} value={t.id}>{KIND_LABEL[t.kind]} · {t.name}</option>
+            ))}
+          </select>
+          <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 12px' }} onClick={() => setTemplatesOpen(true)}>
+            Editar plantillas ›
+          </button>
+        </div>
+
+        <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 13, color: C.text }}>
+          <strong>Para:</strong> {defaultRecipient.full_name || defaultRecipient.email}
+          <span style={{ color: C.muted, marginLeft: 8 }}>&lt;{defaultRecipient.email}&gt;</span>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>Asunto</label>
+            <VariablePicker onInsert={insertIntoSubject} anchorRight />
+          </div>
+          <input ref={subjectRef} style={s.input} value={subject} onChange={e => setSubject(e.target.value)}
+            placeholder="p. ej. ¡Bienvenido(a) a {{ organization.name }}!" />
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>Cuerpo</label>
+          <RichTextEditor key={bodyKey} ref={bodyRef} value={body} onChange={setBody}
+            placeholder="Hola {{ to.first_name }}, …"
+            minHeight={220}
+            extraToolbar={<VariablePicker onInsert={insertIntoBody} anchorRight />} />
+        </div>
+
+        {preview && (
+          <div style={{ border: `1.5px solid ${C.primary}`, borderRadius: 10, padding: '12px 14px', background: C.primaryLight }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.primary, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>Vista previa renderizada</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 6 }}>{preview.subject || <em style={{ color: C.muted, fontWeight: 400 }}>(sin asunto)</em>}</div>
+            {preview.body
+              ? <div style={{ fontSize: 13, color: C.text, lineHeight: 1.55 }} dangerouslySetInnerHTML={{ __html: preview.body }} />
+              : <em style={{ color: C.muted, fontSize: 13 }}>(sin cuerpo)</em>}
+          </div>
+        )}
+
+        {err && <p style={s.errorText}>{err}</p>}
+
+        <div style={s.modalActions}>
+          <button style={s.btnGhost} onClick={onClose}>Cancelar</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button style={s.btnGhost} onClick={doPreview}>Vista previa</button>
+            <button style={s.btnPrimary} onClick={send} disabled={busy}>{busy ? '…' : 'Enviar 1'}</button>
+          </div>
+        </div>
+
+        {templatesOpen && (
+          <TemplatesManagerModal slug={slug}
+            onClose={() => { setTemplatesOpen(false); reloadTemplates() }} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function TemplatesManagerModal({ slug, onClose }: { slug: string; onClose: () => void }) {
+  const [kind, setKind] = useState<EmailKind>('general')
+  const [templates, setTemplates] = useState<EmailTemplate[]>([])
+  const [editing, setEditing] = useState<EmailTemplate | null | undefined>(undefined) // undefined closed, null create
+  const [busy, setBusy] = useState(false)
+
+  const reload = useCallback(async () => {
+    const r = await api(`/api/v1/tenant/${slug}/email/templates`)
+    setTemplates(r.ok ? await r.json() : [])
+  }, [slug])
+  useEffect(() => { reload() }, [reload])
+
+  const visible = templates.filter(t => t.kind === kind)
+
+  async function deleteTemplate(t: EmailTemplate) {
+    if (!confirm(`¿Eliminar la plantilla "${t.name}"?`)) return
+    const r = await api(`/api/v1/tenant/${slug}/email/templates/${t.id}`, { method: 'DELETE' })
+    if (r.ok) setTemplates(prev => prev.filter(x => x.id !== t.id))
+  }
+
+  if (editing !== undefined) {
+    return <TemplateEditorModal slug={slug} kind={kind} initial={editing}
+      onSaved={t => { setTemplates(prev => editing ? prev.map(x => x.id === t.id ? t : x) : [...prev, t]); setEditing(undefined) }}
+      onClose={() => setEditing(undefined)} />
+  }
+
+  return (
+    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div data-tp="wizard-modal" style={{ ...s.modal, width: 640 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', padding: '0 0 4px' }}>‹ ENVIAR CORREO</button>
+            <h3 style={s.modalTitle}>Plantillas de email</h3>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: C.muted, lineHeight: 1 }}>✕</button>
+        </div>
+
+        <div style={{ display: 'flex', gap: 0, border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden' }}>
+          {(['general','schedule','signup','welcome'] as EmailKind[]).map((k, i) => {
+            const active = k === kind
+            return (
+              <button key={k} onClick={() => setKind(k)}
+                style={{
+                  flex: 1, padding: '12px 8px', cursor: 'pointer', border: 'none',
+                  background: active ? C.surface : C.bg,
+                  borderRight: i < 3 ? `1px solid ${C.border}` : 'none',
+                  fontSize: 12, fontWeight: 600, color: active ? C.text : C.muted,
+                }}>{KIND_LABEL[k]}</button>
+            )
+          })}
+        </div>
+
+        <p style={{ fontSize: 12, color: C.muted, margin: 0, lineHeight: 1.6 }}>{KIND_HINT[kind]}</p>
+
+        {visible.length === 0
+          ? (
+            <div style={{ padding: 36, textAlign: 'center', border: `1px dashed ${C.border}`, borderRadius: 10 }}>
+              <p style={{ color: C.success, fontWeight: 600, margin: 0 }}>Aún no has creado plantillas {KIND_LABEL[kind]}</p>
+              <p style={{ color: C.muted, fontSize: 13, margin: '4px 0 0' }}>Crea la primera abajo.</p>
+            </div>
+          )
+          : (
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden' }}>
+              {visible.map(t => (
+                <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: `1px solid ${C.soft}` }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{t.name}</div>
+                    <div style={{ fontSize: 11, color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.subject}</div>
+                  </div>
+                  <button style={{ ...s.btnGhost, fontSize: 12, padding: '4px 10px' }} onClick={() => setEditing(t)}>Editar</button>
+                  <button style={{ ...s.btnGhost, fontSize: 12, padding: '4px 10px', color: C.danger, borderColor: 'rgba(239,68,68,.3)' }} onClick={() => deleteTemplate(t)}>Eliminar</button>
+                </div>
+              ))}
+            </div>
+          )
+        }
+
+        <div style={s.modalActions}>
+          <button style={s.btnGhost} onClick={onClose}>Cerrar</button>
+          <button style={s.btnPrimary} onClick={() => setEditing(null)} disabled={busy}>+ Nueva plantilla {KIND_LABEL[kind]}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function TemplateEditorModal({ slug, kind, initial, onSaved, onClose }: {
+  slug: string; kind: EmailKind; initial?: EmailTemplate | null
+  onSaved: (t: EmailTemplate) => void; onClose: () => void
+}) {
+  const [name, setName]   = useState(initial?.name || '')
+  const [subject, setSubject] = useState(initial?.subject || '')
+  const [body, setBody]   = useState(initial?.body || '')
+  const [busy, setBusy]   = useState(false)
+  const [err, setErr]     = useState('')
+  const bodyRef = React.useRef<RichTextEditorHandle>(null)
+  const subjectRef = React.useRef<HTMLInputElement>(null)
+
+  function insertBody(tok: string) { bodyRef.current?.insert(tok) }
+  function insertSubject(tok: string) {
+    const el = subjectRef.current
+    if (!el) { setSubject(s => s + tok); return }
+    const start = el.selectionStart ?? subject.length, end = el.selectionEnd ?? subject.length
+    setSubject(subject.slice(0, start) + tok + subject.slice(end))
+    setTimeout(() => { el.focus(); el.setSelectionRange(start + tok.length, start + tok.length) }, 0)
+  }
+
+  async function save() {
+    if (!name.trim()) { setErr('Nombre requerido'); return }
+    setBusy(true); setErr('')
+    const url = initial
+      ? `/api/v1/tenant/${slug}/email/templates/${initial.id}`
+      : `/api/v1/tenant/${slug}/email/templates`
+    const r = await api(url, {
+      method: initial ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, name: name.trim(), subject, body }),
+    })
+    if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); setBusy(false); return }
+    onSaved(await r.json())
+  }
+
+  return (
+    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div data-tp="wizard-modal" style={{ ...s.modal, width: 680 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h3 style={s.modalTitle}>{initial ? 'Editar plantilla' : `Nueva plantilla ${KIND_LABEL[kind]}`}</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: C.muted, lineHeight: 1 }}>✕</button>
+        </div>
+        <label style={s.label}>Nombre interno<input style={s.input} value={name} onChange={e => setName(e.target.value)} placeholder="p. ej. Bienvenida Equipo de Adoración" /></label>
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>Asunto</label>
+            <VariablePicker onInsert={insertSubject} anchorRight />
+          </div>
+          <input ref={subjectRef} style={s.input} value={subject} onChange={e => setSubject(e.target.value)} />
+        </div>
+        <div>
+          <label style={{ fontSize: 12, fontWeight: 600, color: C.muted, display: 'block', marginBottom: 4 }}>Cuerpo</label>
+          <RichTextEditor ref={bodyRef} value={body} onChange={setBody} minHeight={260}
+            extraToolbar={<VariablePicker onInsert={insertBody} anchorRight />} />
+        </div>
+        {err && <p style={s.errorText}>{err}</p>}
+        <div style={s.modalActions}>
+          <button style={s.btnGhost} onClick={onClose}>Cancelar</button>
+          <button style={s.btnPrimary} onClick={save} disabled={busy}>{busy ? '…' : initial ? 'Guardar' : 'Crear'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PersonDetailView — full person profile (Scheduling | Communication | Details)
 // ─────────────────────────────────────────────────────────────────────────────
 function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
@@ -1547,6 +2107,36 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
   const [teamPickerOpen, setTeamPickerOpen] = useState(false)
   const [pickedTeamId, setPickedTeamId] = useState<string>('')
   const [pickedTeamRole, setPickedTeamRole] = useState('')
+  // Signature
+  const [sigEditing, setSigEditing] = useState(false)
+  const [sigText, setSigText]   = useState(person.signature?.text  || '')
+  const [sigImage, setSigImage] = useState<string | null>(person.signature?.image || null)
+  const [sigSaving, setSigSaving] = useState(false)
+  const [sigErr, setSigErr] = useState('')
+  const sigFileRef = React.useRef<HTMLInputElement>(null)
+  const sigTextRef = React.useRef<HTMLTextAreaElement>(null)
+  function insertIntoSig(tok: string) {
+    const el = sigTextRef.current
+    if (!el) { setSigText(t => t + tok); return }
+    const start = el.selectionStart ?? sigText.length, end = el.selectionEnd ?? sigText.length
+    const newVal = sigText.slice(0, start) + tok + sigText.slice(end)
+    setSigText(newVal)
+    setTimeout(() => { el.focus(); el.setSelectionRange(start + tok.length, start + tok.length) }, 0)
+  }
+  // Communication: messages list + compose
+  const [msgs, setMsgs] = useState<EmailMessage[]>([])
+  const [msgsLoading, setMsgsLoading] = useState(true)
+  const [msgsTab, setMsgsTab] = useState<'received' | 'sent'>('received')
+  const [composeOpen, setComposeOpen] = useState(false)
+  const [openMsg, setOpenMsg] = useState<EmailMessage | null>(null)
+  const reloadMsgs = useCallback(async () => {
+    setMsgsLoading(true)
+    try {
+      const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/messages`)
+      setMsgs(r.ok ? await r.json() : [])
+    } finally { setMsgsLoading(false) }
+  }, [slug, person.id])
+  useEffect(() => { reloadMsgs() }, [reloadMsgs])
   const [editingBlockout, setEditingBlockout] = useState<Blockout | null>(null)
 
   const reload = useCallback(async () => {
@@ -1611,31 +2201,37 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
     return v === null || v === undefined ? 'Sin límite' : `Hasta ${v}`
   }
 
-  const Tab = ({ id, label }: { id: typeof tab; label: string }) => {
-    const active = tab === id
-    return (
-      <button onClick={() => setTab(id)}
-        style={{
-          background: active ? C.surface : 'transparent', border: 'none', cursor: 'pointer',
-          padding: '10px 18px', fontSize: 13, fontWeight: 600,
-          color: active ? C.text : C.muted,
-          borderTopLeftRadius: 8, borderTopRightRadius: 8,
-          borderBottom: `2px solid ${active ? C.primary : 'transparent'}`,
-        }}>{label}</button>
-    )
+  // ── Signature ─────────────────────────────────────────────────────────────
+  const SIG_MAX = 1 * 1024 * 1024
+  function handleSigFile(file: File) {
+    setSigErr('')
+    if (!file.type.startsWith('image/')) { setSigErr('Solo imágenes (JPG, PNG, WebP, etc.)'); return }
+    if (file.size > SIG_MAX)             { setSigErr(`Imagen demasiado grande (máx. 1 MB · actual ${(file.size/1024).toFixed(0)} KB)`); return }
+    const r = new FileReader()
+    r.onload = () => setSigImage(typeof r.result === 'string' ? r.result : null)
+    r.onerror = () => setSigErr('No se pudo leer la imagen')
+    r.readAsDataURL(file)
   }
-  const SectionTitle = ({ children, hint, right }: { children: React.ReactNode; hint?: string; right?: React.ReactNode }) => (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-      <h3 style={{ fontSize: 15, fontWeight: 700, color: C.text, margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-        {children}
-        {hint && <span title={hint} style={{ color: C.light, cursor: 'help', fontSize: 12 }}>ⓘ</span>}
-      </h3>
-      {right}
-    </div>
-  )
-  const Card = ({ children, padded = true }: { children: React.ReactNode; padded?: boolean }) => (
-    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: padded ? '16px 18px' : 0 }}>{children}</div>
-  )
+  async function saveSignature() {
+    setSigSaving(true); setSigErr('')
+    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ signature: { text: sigText.trim() || null, image: sigImage } }),
+    })
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}))
+      setSigErr(j.detail || 'Error'); setSigSaving(false); return
+    }
+    const updated = await r.json() as ServicePerson
+    onChanged(updated)
+    setSigEditing(false); setSigSaving(false)
+  }
+  function cancelSig() {
+    setSigText(person.signature?.text || '')
+    setSigImage(person.signature?.image || null)
+    setSigErr(''); setSigEditing(false)
+  }
+
 
   return (
     <main style={{ ...s.main, gap: 0 }}>
@@ -1667,9 +2263,20 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
 
       {/* Tabs */}
       <div data-tp="tab-strip" style={{ display: 'flex', gap: 4, padding: '12px 0 0', borderBottom: `1px solid ${C.border}` }}>
-        <Tab id="scheduling" label="Programación" />
-        <Tab id="communication" label="Comunicación" />
-        <Tab id="details" label="Detalles" />
+        {(['scheduling', 'communication', 'details'] as const).map(id => {
+          const label = id === 'scheduling' ? 'Programación' : id === 'communication' ? 'Comunicación' : 'Detalles'
+          const active = tab === id
+          return (
+            <button key={id} onClick={() => setTab(id)}
+              style={{
+                background: active ? C.surface : 'transparent', border: 'none', cursor: 'pointer',
+                padding: '10px 18px', fontSize: 13, fontWeight: 600,
+                color: active ? C.text : C.muted,
+                borderTopLeftRadius: 8, borderTopRightRadius: 8,
+                borderBottom: `2px solid ${active ? C.primary : 'transparent'}`,
+              }}>{label}</button>
+          )
+        })}
       </div>
 
       {/* Tab content */}
@@ -1857,19 +2464,54 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
         {tab === 'communication' && <>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
             <div>
-              <SectionTitle right={<span style={{ ...s.pill, background: C.primaryLight, color: C.primary }}>Nuevo</span>}>Mensajes</SectionTitle>
+              <SectionTitle right={
+                <button style={{ ...s.btnPrimary, fontSize: 12, padding: '6px 12px' }} onClick={() => setComposeOpen(true)}>+ Nuevo</button>
+              }>Mensajes</SectionTitle>
               <Card padded={false}>
                 <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}` }}>
-                  {['Recibidos', 'Enviados'].map((t, i) => (
-                    <button key={t} disabled={i > 0}
-                      style={{ padding: '10px 18px', fontSize: 13, background: i === 0 ? C.soft : 'transparent', border: 'none', cursor: i === 0 ? 'pointer' : 'not-allowed', fontWeight: 600, color: i === 0 ? C.text : C.muted }}>
-                      {t}
-                    </button>
-                  ))}
+                  {(['received', 'sent'] as const).map(t => {
+                    const active = msgsTab === t
+                    const label = t === 'received' ? 'Recibidos' : 'Enviados'
+                    return (
+                      <button key={t} onClick={() => setMsgsTab(t)}
+                        style={{ padding: '10px 18px', fontSize: 13, background: active ? C.soft : 'transparent', border: 'none', cursor: 'pointer', fontWeight: 600, color: active ? C.text : C.muted }}>
+                        {label}
+                      </button>
+                    )
+                  })}
                 </div>
-                <div style={{ padding: '40px 16px', textAlign: 'center', color: C.muted, fontSize: 12 }}>
-                  El historial de email se conserva durante tres meses.
-                </div>
+                {(() => {
+                  const filtered = msgs.filter(m => m.direction === msgsTab)
+                  if (msgsLoading) return <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>Cargando…</div>
+                  if (filtered.length === 0) return (
+                    <div style={{ padding: '32px 16px', textAlign: 'center', color: C.muted, fontSize: 12 }}>
+                      {msgsTab === 'sent' ? 'Aún no se han enviado correos.' : 'Aún no hay correos recibidos.'}<br/>
+                      <span style={{ fontSize: 11 }}>El historial de email se conserva durante tres meses (configurable hasta 12).</span>
+                    </div>
+                  )
+                  return (
+                    <div>
+                      {filtered.map(m => (
+                        <button key={m.id} onClick={() => setOpenMsg(m)}
+                          style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 14px', background: 'none', border: 'none', borderBottom: `1px solid ${C.soft}`, cursor: 'pointer' }}
+                          onMouseEnter={e => e.currentTarget.style.background = C.soft}
+                          onMouseLeave={e => e.currentTarget.style.background = 'none'}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {m.subject || <em style={{ color: C.muted, fontWeight: 400 }}>(sin asunto)</em>}
+                            </span>
+                            <span style={{ fontSize: 11, color: C.muted, flexShrink: 0 }}>{fmtDate(m.created_at)}</span>
+                          </div>
+                          <div style={{ fontSize: 11, color: C.muted, marginTop: 2, display: 'flex', gap: 6 }}>
+                            <span>{msgsTab === 'sent' ? 'Para' : 'De'}: {m.counterparty_name || (msgsTab === 'sent' ? m.recipient_email : m.sender_email || '—')}</span>
+                            {m.status === 'queued' && <span style={{ ...s.pill, background: C.soft, color: C.muted, fontSize: 10, padding: '1px 6px' }}>En cola</span>}
+                            {m.status === 'failed' && <span style={{ ...s.pill, background: C.dangerLight, color: C.danger, fontSize: 10, padding: '1px 6px' }}>Fallido</span>}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )
+                })()}
               </Card>
             </div>
             <div>
@@ -1883,24 +2525,91 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
             <div>
-              <SectionTitle hint="Notificaciones push y SMS">Notificaciones</SectionTitle>
+              <SectionTitle hint="Notificaciones push (Fase 3 — app móvil)">Notificaciones</SectionTitle>
               <Card>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
                   <div style={{ width: 28, height: 28, borderRadius: 6, background: C.successLight, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.success, fontWeight: 700, fontSize: 13 }}>≡</div>
                   <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>App preferida</span>
                 </div>
-                <select style={{ ...s.select, width: '100%' }} disabled>
-                  <option>Servicios</option>
+                <select style={{ ...s.select, width: '100%' }}
+                  value={person.preferred_notif_app || 'servicios'}
+                  onChange={async e => {
+                    const v = e.target.value as 'servicios' | 'worsyn'
+                    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}`, {
+                      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ preferred_notif_app: v }),
+                    })
+                    if (r.ok) onChanged(await r.json())
+                  }}>
+                  <option value="servicios">Servicios (este módulo)</option>
+                  <option value="worsyn" disabled>Worsyn (próximamente)</option>
                 </select>
-                <p style={{ fontSize: 11, color: C.muted, margin: '8px 0 0' }}>Gestiona las preferencias de notificación desde el perfil en la app de Servicios.</p>
+                <p style={{ fontSize: 11, color: C.muted, margin: '8px 0 0', lineHeight: 1.55 }}>
+                  Cuando la app móvil esté disponible, las notificaciones push llegarán al app elegido. Por defecto es <strong>Servicios</strong>.
+                </p>
               </Card>
             </div>
             <div>
-              <SectionTitle hint="Firma para emails">Firma</SectionTitle>
+              <SectionTitle hint="Firma usada al enviar comunicaciones por email"
+                right={
+                  sigEditing
+                    ? (
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={cancelSig}>Cancelar</button>
+                        <button style={{ ...s.btnPrimary, fontSize: 12, padding: '6px 12px' }} onClick={saveSignature} disabled={sigSaving}>{sigSaving ? '…' : 'Guardar'}</button>
+                      </div>
+                    )
+                    : <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={() => setSigEditing(true)}>Editar</button>
+                }>
+                Firma
+              </SectionTitle>
               <Card>
-                <textarea disabled
-                  style={{ ...s.input, minHeight: 90, resize: 'vertical' as const, fontFamily: 'inherit', background: C.bg, color: C.muted }}
-                  placeholder={`${person.full_name || ''}\nLíder\n— Tu organización`} />
+                {sigEditing ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: 11, color: C.muted }}>Acepta variables del destinatario y de la organización.</span>
+                      <VariablePicker onInsert={insertIntoSig} anchorRight allowedGroups={['Destinatario', 'Organización']} />
+                    </div>
+                    <textarea ref={sigTextRef} value={sigText} onChange={e => setSigText(e.target.value)}
+                      placeholder={`${person.full_name || 'Nombre'}\nRol o cargo\n{{ organization.name }}`}
+                      style={{ ...s.input, minHeight: 110, resize: 'vertical' as const, fontFamily: 'inherit' }} />
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 6 }}>Imagen / Logo</div>
+                      {sigImage ? (
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                          <img src={sigImage} alt="firma"
+                            style={{ maxWidth: 220, maxHeight: 90, borderRadius: 8, border: `1px solid ${C.border}`, background: '#fff', objectFit: 'contain', padding: 4 }} />
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={() => sigFileRef.current?.click()}>Reemplazar</button>
+                            <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px', color: C.danger, borderColor: 'rgba(239,68,68,.3)' }} onClick={() => setSigImage(null)}>Quitar</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button onClick={() => sigFileRef.current?.click()}
+                          style={{ width: '100%', padding: '18px 16px', border: `1.5px dashed ${C.border}`, borderRadius: 10, background: C.bg, cursor: 'pointer', color: C.muted, fontSize: 13 }}>
+                          + Subir imagen (máx. 1 MB · JPG, PNG, WebP)
+                        </button>
+                      )}
+                      <input ref={sigFileRef} type="file" accept="image/*"
+                        style={{ display: 'none' }}
+                        onChange={e => { const f = e.target.files?.[0]; if (f) handleSigFile(f); e.target.value = '' }} />
+                    </div>
+                    {sigErr && <p style={s.errorText}>{sigErr}</p>}
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {person.signature?.text
+                      ? <pre style={{ margin: 0, fontFamily: 'inherit', fontSize: 13, color: C.text, whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{person.signature.text}</pre>
+                      : <p style={{ margin: 0, fontSize: 13, color: C.muted, fontStyle: 'italic' }}>Sin firma de texto.</p>}
+                    {person.signature?.image && (
+                      <img src={person.signature.image} alt="firma"
+                        style={{ maxWidth: 220, maxHeight: 90, borderRadius: 8, border: `1px solid ${C.border}`, background: '#fff', objectFit: 'contain', padding: 4 }} />
+                    )}
+                    <p style={{ margin: '4px 0 0', fontSize: 11, color: C.light, fontStyle: 'italic' }}>
+                      Se adjuntará automáticamente al final de los correos enviados desde el portal (cuando SMTP esté activo).
+                    </p>
+                  </div>
+                )}
               </Card>
             </div>
           </div>
@@ -1967,6 +2676,31 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
             setBlockoutOpen(false); setEditingBlockout(null)
           }}
           onClose={() => { setBlockoutOpen(false); setEditingBlockout(null) }} />
+      )}
+      {composeOpen && (
+        <ComposeEmailModal slug={slug} defaultRecipient={person}
+          onSent={sent => { setMsgs(prev => [...sent, ...prev]); setComposeOpen(false); setMsgsTab('sent') }}
+          onClose={() => setComposeOpen(false)} />
+      )}
+      {openMsg && (
+        <div style={s.overlay} onClick={e => e.target === e.currentTarget && setOpenMsg(null)}>
+          <div data-tp="modal" style={{ ...s.modal, width: 580 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <h3 style={s.modalTitle}>{openMsg.subject || '(sin asunto)'}</h3>
+              <button onClick={() => setOpenMsg(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: C.muted, lineHeight: 1 }}>✕</button>
+            </div>
+            <div style={{ fontSize: 12, color: C.muted, display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <div><strong style={{ color: C.text }}>{openMsg.direction === 'sent' ? 'Para' : 'De'}:</strong> {openMsg.counterparty_name || ''} &lt;{openMsg.direction === 'sent' ? openMsg.recipient_email : (openMsg.sender_email || '')}&gt;</div>
+              <div><strong style={{ color: C.text }}>Fecha:</strong> {fmtDate(openMsg.created_at)} · <strong style={{ color: C.text }}>Estado:</strong> {openMsg.status}</div>
+              {openMsg.error && <div style={{ color: C.danger }}>Error: {openMsg.error}</div>}
+            </div>
+            <div style={{ margin: 0, fontFamily: 'inherit', fontSize: 13, color: C.text, lineHeight: 1.6, background: C.bg, padding: '14px 16px', borderRadius: 8, maxHeight: '50vh', overflow: 'auto' }}
+              dangerouslySetInnerHTML={{ __html: openMsg.body }} />
+            <div style={s.modalActions}>
+              <button style={s.btnPrimary} onClick={() => setOpenMsg(null)}>Cerrar</button>
+            </div>
+          </div>
+        </div>
       )}
     </main>
   )
