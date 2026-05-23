@@ -439,6 +439,52 @@ export default function TenantPortal() {
     return () => document.removeEventListener('mousedown', h)
   }, [dropOpen])
 
+  // One-time inject of responsive CSS targeting [data-tp="..."] hooks. Inline
+  // styles take precedence over external CSS by default, so we use !important
+  // sparingly to override widths/paddings at narrow viewports.
+  useEffect(() => {
+    const id = 'worsyn-tenant-responsive'
+    if (document.getElementById(id)) return
+    const el = document.createElement('style')
+    el.id = id
+    el.textContent = `
+/* Tenant portal — tablet (≤900px) */
+@media (max-width: 900px) {
+  [data-tp="topbar"]      { padding: 0 8px 0 0 !important; }
+  [data-tp="orgname"]     { display: none !important; }
+  [data-tp="modlabel"]    { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+  [data-tp="sidebar"]     { width: 180px !important; }
+  [data-tp="main"]        { padding: 16px 16px !important; }
+  [data-tp="detail-grid"] { grid-template-columns: 1fr !important; }
+  [data-tp="modal"]       { width: 95vw !important; max-width: 95vw !important; }
+  [data-tp="wizard-modal"]{ width: 95vw !important; max-width: 95vw !important; }
+  [data-tp="cal-modal"]   { width: 96vw !important; max-width: 96vw !important; }
+}
+/* Tenant portal — mobile (≤640px) */
+@media (max-width: 640px) {
+  [data-tp="topbar"]      { height: auto !important; padding: 8px !important; flex-wrap: wrap; gap: 6px; }
+  [data-tp="topuser-name"]{ display: none; }
+  [data-tp="username"]    { display: none; }
+  [data-tp="content"]     { flex-direction: column !important; overflow: visible !important; }
+  [data-tp="sidebar"]     { width: 100% !important; border-right: none !important; border-bottom: 1px solid #E2E8F0 !important; max-height: 240px; }
+  [data-tp="sidebar-nav"] { display: flex; gap: 6px; overflow-x: auto; padding: 8px !important; flex: 0 0 auto; }
+  [data-tp="main"]        { padding: 14px 12px !important; }
+  [data-tp="tab-strip"]   { overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap !important; }
+  [data-tp="tab-strip"] button { flex-shrink: 0; }
+  [data-tp="table-wrap"]  { overflow-x: auto !important; }
+  [data-tp="table-wrap"] table { min-width: 640px; }
+  [data-tp="detail-header"]{ flex-wrap: wrap; gap: 12px !important; }
+  [data-tp="detail-header-actions"]{ width: 100%; justify-content: flex-end; }
+  [data-tp="cal-modal"] [data-tp="cal-modal-body"] { flex-direction: column !important; }
+  [data-tp="cal-modal"] [data-tp="cal-modal-side"]  { width: 100% !important; border-left: none !important; border-top: 1px solid #E2E8F0 !important; padding-left: 0 !important; padding-top: 12px !important; }
+  /* Login card padding */
+  [data-tp="loginpage"]   { padding: 16px !important; }
+  [data-tp="loginpage"] [data-tp="logincard"] { padding: 28px 20px 24px !important; }
+}
+`
+    document.head.appendChild(el)
+  }, [])
+
   // Redirect if the user tries to access a module outside their accessible_modules.
   // Admins/leaders always get all modules from the server. Members-only-in-Services
   // get ['servicios','perfil'] — they land on servicios by default.
@@ -831,8 +877,8 @@ export default function TenantPortal() {
 
   // ── Not found
   if (screen === 'not-found' || !org) return (
-    <div style={s.fullPage}>
-      <div style={s.loginCard}>
+    <div style={s.fullPage} data-tp="loginpage">
+      <div style={s.loginCard} data-tp="logincard">
         <div style={s.wLogo}>
           <svg viewBox="0 0 44 32" xmlns="http://www.w3.org/2000/svg" style={{ width: 28, height: 20 }}>
             <rect x="0"    y="2"  width="7" height="28" rx="3.5" fill="white"/>
@@ -874,10 +920,10 @@ export default function TenantPortal() {
   const tableHeaders = ['Miembro', 'Ministerio', 'Roles', 'Contacto', 'Ingresó', 'Estado', ...(canEdit ? [''] : [])]
 
   return (
-    <div style={s.appWrap}>
+    <div style={s.appWrap} data-tp="app">
 
       {/* ── Top bar ────────────────────────────────────────────────────────── */}
-      <header style={s.topBar}>
+      <header style={s.topBar} data-tp="topbar">
 
         {/* Left: module switcher */}
         <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }} ref={dropRef}>
@@ -885,7 +931,7 @@ export default function TenantPortal() {
             <span style={{ ...s.modIcon, background: currentMod?.color ?? '#64748B' }}>
               {currentMod?.icon ?? <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14}><path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd"/></svg>}
             </span>
-            <span style={s.modLabel}>{currentMod?.label ?? 'Configuración'}</span>
+            <span style={s.modLabel} data-tp="modlabel">{currentMod?.label ?? 'Configuración'}</span>
             <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14}
               style={{ color: C.muted, marginLeft: 2, flexShrink: 0, transform: dropOpen ? 'rotate(180deg)' : 'none', transition: 'transform 160ms' }}>
               <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd"/>
@@ -985,7 +1031,7 @@ export default function TenantPortal() {
 
         {/* Right: org name + user logout */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <span style={s.orgName}>{org.name}</span>
+          <span style={s.orgName} data-tp="orgname">{org.name}</span>
           <div style={{ position: 'relative' }} ref={logoutRef}>
             <button style={s.topUser} onClick={() => setLogoutOpen(o => !o)}>
               <div style={s.userAvatar}>
@@ -994,7 +1040,7 @@ export default function TenantPortal() {
                   : userName.slice(0, 2).toUpperCase()
                 }
               </div>
-              <span style={s.userName}>{userName}</span>
+              <span style={s.userName} data-tp="username">{userName}</span>
               <svg viewBox="0 0 20 20" fill="currentColor" width={14} height={14} style={{ color: C.light }}>
                 <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd"/>
               </svg>
@@ -1053,7 +1099,7 @@ export default function TenantPortal() {
       </header>
 
       {/* ── Content ──────────────────────────────────────────────────────────── */}
-      <div style={s.contentWrap}>
+      <div style={s.contentWrap} data-tp="content">
 
         {/* ── Miembros — Dashboard ──────────────────────────────────────────── */}
         {module === 'miembros' && miembrosTab === 'dashboard' && (
@@ -1115,7 +1161,7 @@ export default function TenantPortal() {
         {/* ── Miembros — Lista ──────────────────────────────────────────────── */}
         {module === 'miembros' && miembrosTab === 'miembros' && !selectedMember && (
           <>
-            <aside style={s.sidebar}>
+            <aside style={s.sidebar} data-tp="sidebar">
               <div style={s.sidebarHead}>
                 <span style={{ ...s.sidebarModIcon, background: '#2563EB' }}>
                   <svg viewBox="0 0 20 20" fill="currentColor" width={13} height={13}><path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd"/></svg>
@@ -1158,7 +1204,7 @@ export default function TenantPortal() {
               </nav>
             </aside>
 
-            <main style={s.main}>
+            <main style={s.main} data-tp="main">
               <div style={s.mainHead}>
                 <div>
                   <h1 style={s.mainTitle}>
@@ -1806,7 +1852,7 @@ export default function TenantPortal() {
         {module === 'configuracion' && (
           <>
             {/* Settings sidebar */}
-            <aside style={s.sidebar}>
+            <aside style={s.sidebar} data-tp="sidebar">
               <div style={s.sidebarHead}>
                 <span style={{ ...s.sidebarModIcon, background: '#64748B' }}>
                   <svg viewBox="0 0 20 20" fill="currentColor" width={13} height={13}><path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd"/></svg>

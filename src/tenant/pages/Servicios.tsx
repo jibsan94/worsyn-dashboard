@@ -435,7 +435,7 @@ function MasterCalendarModal({ occurrences, onClose }: { occurrences: Occurrence
 
   return (
     <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={{ ...s.modal, width: 940, maxWidth: '95vw', maxHeight: '92vh' }}>
+      <div data-tp="cal-modal" style={{ ...s.modal, width: 940, maxWidth: '95vw', maxHeight: '92vh' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <h3 style={s.modalTitle}>Calendario maestro</h3>
@@ -453,7 +453,7 @@ function MasterCalendarModal({ occurrences, onClose }: { occurrences: Occurrence
           <button style={s.btnGhost} onClick={() => setCursor(() => { const d = new Date(); d.setDate(1); return d })}>Hoy</button>
         </div>
 
-        <div style={{ display: 'flex', gap: 16, flex: 1, overflow: 'hidden' }}>
+        <div data-tp="cal-modal-body" style={{ display: 'flex', gap: 16, flex: 1, overflow: 'hidden' }}>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, textAlign: 'center', marginBottom: 4 }}>
               {['LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB', 'DOM'].map(d => (
@@ -494,7 +494,7 @@ function MasterCalendarModal({ occurrences, onClose }: { occurrences: Occurrence
             </div>
           </div>
 
-          <div style={{ width: 280, flexShrink: 0, borderLeft: `1px solid ${C.border}`, paddingLeft: 16, overflow: 'auto' }}>
+          <div data-tp="cal-modal-side" style={{ width: 280, flexShrink: 0, borderLeft: `1px solid ${C.border}`, paddingLeft: 16, overflow: 'auto' }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: C.light, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 10 }}>
               {selectedDay ? fmtDate(selectedDay) : 'Selecciona un día'}
             </div>
@@ -706,8 +706,8 @@ function ListView({ slug, types, setTypes, teams }: {
 
   return (
     <>
-      <div style={s.layout}>
-        <div style={s.sidebar}>
+      <div data-tp="content" style={s.layout}>
+        <div data-tp="sidebar" style={s.sidebar}>
           <MiniCalendar occurrences={occurrences} />
           <button style={{ ...s.btnPrimary, justifyContent: 'center', width: '100%' }} onClick={() => setMasterOpen(true)}>
             Calendario maestro
@@ -878,9 +878,12 @@ interface ServicePerson {
   type_permissions: TypePerm[]
   welcomed_at: string | null
   password_set: boolean
+  scheduling?: { max_per_month: number | null; max_per_day: number | null }
   temp_password?: string
   debug_password?: string | null   // TEST-ONLY — remove before prod
 }
+
+interface PersonTeam { membership_id: string; team_id: string; team_name: string; team_color: string | null; role: string | null }
 
 const SERVICE_ROLE_LABEL: Record<ServiceRole, string> = {
   administrator: 'Administrador',
@@ -1288,6 +1291,688 @@ function AddPersonWizard({ slug, types, orgMembers, existingMemberIds, onCreated
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Blockouts — types + modal + projection
+// ─────────────────────────────────────────────────────────────────────────────
+type RepeatKind = 'none' | 'day' | 'week' | 'month' | 'year'
+interface Blockout {
+  id: string
+  start_date: string  // YYYY-MM-DD
+  end_date: string
+  all_day: boolean
+  repeat_kind: RepeatKind
+  repeat_interval: number
+  repeat_until: string | null  // null = forever
+  reason: string | null
+}
+
+const REPEAT_KIND_LABEL: Record<RepeatKind, string> = {
+  none: 'No se repite', day: 'día', week: 'semana', month: 'mes', year: 'año',
+}
+// "Cada" / "Cada dos" / "Cada tres" … up to "Cada doce". Index 0 unused.
+const CADA_LABEL = [
+  '—', 'Cada', 'Cada dos', 'Cada tres', 'Cada cuatro', 'Cada cinco',
+  'Cada seis', 'Cada siete', 'Cada ocho', 'Cada nueve', 'Cada diez',
+  'Cada once', 'Cada doce',
+]
+
+function blockoutLabel(b: Blockout): string {
+  const same = b.start_date === b.end_date
+  const range = same ? fmtDate(b.start_date) : `${fmtDate(b.start_date)} — ${fmtDate(b.end_date)}`
+  if (b.repeat_kind === 'none') return range
+  const cada = CADA_LABEL[b.repeat_interval] || 'Cada'
+  const unit = REPEAT_KIND_LABEL[b.repeat_kind]
+  const tail = b.repeat_until ? `hasta ${fmtDate(b.repeat_until)}` : 'siempre'
+  return `${range} · ${cada} ${unit} ${tail}`
+}
+
+function BlockoutModal({ slug, smId, initial, onSaved, onClose }: {
+  slug: string
+  smId: string
+  initial?: Blockout
+  onSaved: (b: Blockout) => void
+  onClose: () => void
+}) {
+  const today = new Date().toISOString().slice(0, 10)
+  const [startDate, setStartDate] = useState(initial?.start_date || today)
+  const [endDate, setEndDate]     = useState(initial?.end_date   || today)
+  const [allDay, setAllDay]       = useState(initial?.all_day ?? true)
+  const [repeatKind, setRepeatKind]         = useState<RepeatKind>(initial?.repeat_kind || 'none')
+  const [repeatInterval, setRepeatInterval] = useState<number>(initial?.repeat_interval || 1)
+  const [untilMode, setUntilMode] = useState<'forever' | 'until'>(initial?.repeat_until ? 'until' : 'forever')
+  const [repeatUntil, setRepeatUntil] = useState<string>(initial?.repeat_until || today)
+  const [reason, setReason] = useState(initial?.reason || '')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr]   = useState('')
+
+  // Selection during calendar interaction
+  const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d })
+  const yr = cursor.getFullYear(), mo = cursor.getMonth()
+  const firstDOW = new Date(yr, mo, 1).getDay()
+  const offset = firstDOW === 0 ? 6 : firstDOW - 1
+  const daysInMo = new Date(yr, mo + 1, 0).getDate()
+  const cells = [...Array(offset).fill(null), ...Array.from({ length: daysInMo }, (_, i) => i + 1)]
+  const moName = cursor.toLocaleString('es-ES', { month: 'long' })
+  const moLabel = `${moName.charAt(0).toUpperCase() + moName.slice(1)} ${yr}`
+
+  function shift(dir: -1 | 1) {
+    setCursor(d => { const n = new Date(d); n.setMonth(n.getMonth() + dir); return n })
+  }
+  function pickDay(iso: string) {
+    // Click sets start (and end if before current start), shift-extend isn't
+    // available without modifier — second click after start extends end.
+    if (iso < startDate) { setStartDate(iso); return }
+    if (iso > endDate)   { setEndDate(iso); return }
+    // Click inside range → reset to single day
+    setStartDate(iso); setEndDate(iso)
+  }
+
+  function isInRange(iso: string) { return iso >= startDate && iso <= endDate }
+
+  async function submit() {
+    if (endDate < startDate) { setErr('La fecha de fin debe ser igual o posterior'); return }
+    setBusy(true); setErr('')
+    const payload = {
+      start_date: startDate, end_date: endDate, all_day: allDay,
+      repeat_kind: repeatKind, repeat_interval: repeatKind === 'none' ? 1 : repeatInterval,
+      repeat_until: repeatKind === 'none' ? null : (untilMode === 'until' ? repeatUntil : null),
+      reason: reason.trim() || null,
+    }
+    const url = initial
+      ? `/api/v1/tenant/${slug}/services/people/${smId}/blockouts/${initial.id}`
+      : `/api/v1/tenant/${slug}/services/people/${smId}/blockouts`
+    const res = await api(url, {
+      method: initial ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}))
+      setErr(j.detail || 'Error'); setBusy(false); return
+    }
+    onSaved(await res.json())
+  }
+
+  return (
+    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ ...s.modal, width: 820, maxWidth: '95vw', padding: 0, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 24px', borderBottom: `1px solid ${C.border}` }}>
+          <h3 style={s.modalTitle}>Fechas de bloqueo</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: C.muted, lineHeight: 1 }}>✕</button>
+        </div>
+        <div data-tp="cal-modal-body" style={{ display: 'flex', minHeight: 420 }}>
+          {/* Calendar */}
+          <div style={{ flex: 1, padding: '20px 24px', borderRight: `1px solid ${C.border}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{moLabel}</span>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12 }}
+                  onClick={() => { const d = new Date(); d.setDate(1); setCursor(d); setStartDate(today); setEndDate(today) }}>
+                  Hoy
+                </button>
+                <div style={{ display: 'flex', gap: 2 }}>
+                  <button style={s.iconBtn} onClick={() => shift(-1)} title="Mes anterior">‹</button>
+                  <button style={s.iconBtn} onClick={() => shift(1)} title="Mes siguiente">›</button>
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, textAlign: 'center', marginBottom: 6 }}>
+              {['LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB', 'DOM'].map(d => (
+                <span key={d} style={{ fontSize: 10, fontWeight: 700, color: C.light, padding: '4px 0', letterSpacing: '0.06em' }}>{d}</span>
+              ))}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4 }}>
+              {cells.map((day, i) => {
+                if (day == null) return <div key={i} style={{ height: 38 }} />
+                const iso = `${yr}-${String(mo + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+                const inRange = isInRange(iso)
+                const isStart = iso === startDate
+                const isEnd = iso === endDate
+                const isToday = iso === today
+                return (
+                  <button key={i} onClick={() => pickDay(iso)}
+                    style={{
+                      height: 38, borderRadius: 8, cursor: 'pointer',
+                      border: isToday && !inRange ? `1.5px solid ${C.primary}` : 'none',
+                      background: inRange ? (isStart || isEnd ? C.danger : '#FECACA') : (isToday ? C.primaryLight : 'transparent'),
+                      color: inRange ? (isStart || isEnd ? '#fff' : '#7F1D1D') : (isToday ? C.primary : C.text),
+                      fontSize: 13, fontWeight: inRange || isToday ? 700 : 500,
+                      transition: 'background 120ms',
+                    }}>{day}</button>
+                )
+              })}
+            </div>
+          </div>
+          {/* Form */}
+          <div style={{ width: 340, padding: '20px 22px', background: C.bg, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input type="checkbox" checked={allDay} onChange={e => setAllDay(e.target.checked)} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Todo el día</span>
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <label style={s.label}>Fecha inicio<input type="date" style={s.input} value={startDate} onChange={e => setStartDate(e.target.value)} /></label>
+              <label style={s.label}>Fecha fin<input type="date" style={s.input} value={endDate} onChange={e => setEndDate(e.target.value)} /></label>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>Repetir</div>
+              {repeatKind === 'none' ? (
+                <select style={s.select} value="none" onChange={e => setRepeatKind(e.target.value as RepeatKind)}>
+                  <option value="none">No se repite</option>
+                  <option value="day">Cada día</option>
+                  <option value="week">Cada semana</option>
+                  <option value="month">Cada mes</option>
+                  <option value="year">Cada año</option>
+                </select>
+              ) : (
+                <>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: 6 }}>
+                    <select style={{ ...s.select, fontSize: 12, padding: '6px 8px' }}
+                      value={repeatInterval} onChange={e => setRepeatInterval(parseInt(e.target.value))}>
+                      {CADA_LABEL.slice(1).map((label, i) => (
+                        <option key={i + 1} value={i + 1}>{label}</option>
+                      ))}
+                    </select>
+                    <select style={{ ...s.select, fontSize: 12, padding: '6px 8px' }}
+                      value={repeatKind} onChange={e => setRepeatKind(e.target.value as RepeatKind)}>
+                      <option value="day">día{repeatInterval > 1 ? 's' : ''}</option>
+                      <option value="week">semana{repeatInterval > 1 ? 's' : ''}</option>
+                      <option value="month">mes{repeatInterval > 1 ? 'es' : ''}</option>
+                      <option value="year">año{repeatInterval > 1 ? 's' : ''}</option>
+                    </select>
+                    <select style={{ ...s.select, fontSize: 12, padding: '6px 8px' }}
+                      value={untilMode} onChange={e => setUntilMode(e.target.value as 'forever' | 'until')}>
+                      <option value="forever">siempre</option>
+                      <option value="until">hasta</option>
+                    </select>
+                  </div>
+                  {untilMode === 'until' && (
+                    <input type="date" style={{ ...s.input, marginTop: 6 }}
+                      value={repeatUntil} onChange={e => setRepeatUntil(e.target.value)} />
+                  )}
+                  <button onClick={() => setRepeatKind('none')}
+                    style={{ background: 'none', border: 'none', color: C.muted, fontSize: 11, cursor: 'pointer', marginTop: 4, padding: 0, textDecoration: 'underline' }}>
+                    No repetir
+                  </button>
+                </>
+              )}
+            </div>
+
+            <label style={s.label}>
+              Motivo <span style={{ color: C.muted, fontWeight: 400 }}>(opcional)</span>
+              <input style={s.input} value={reason} onChange={e => setReason(e.target.value)} placeholder="p. ej. Vacaciones" />
+            </label>
+
+            {err && <p style={s.errorText}>{err}</p>}
+          </div>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 24px', borderTop: `1px solid ${C.border}`, background: C.surface }}>
+          <span style={{ fontSize: 12, color: C.muted }}>
+            <svg viewBox="0 0 16 16" fill={C.muted} width={12} height={12} style={{ verticalAlign: 'middle', marginRight: 4 }}>
+              <path d="M8 0a8 8 0 100 16A8 8 0 008 0zm0 4a1 1 0 110 2 1 1 0 010-2zm1 8H7v-5h2v5z"/>
+            </svg>
+            Haz clic en otra fecha del calendario para extender el rango.
+          </span>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button style={s.btnGhost} onClick={onClose}>Cancelar</button>
+            <button style={s.btnPrimary} onClick={submit} disabled={busy}>{busy ? '…' : initial ? 'Guardar' : 'Guardar bloqueo'}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PersonDetailView — full person profile (Scheduling | Communication | Details)
+// ─────────────────────────────────────────────────────────────────────────────
+function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
+  slug: string
+  person: ServicePerson
+  allTeams: Team[]
+  onBack: () => void
+  onChanged: (p: ServicePerson) => void
+}) {
+  const [tab, setTab] = useState<'scheduling' | 'communication' | 'details'>('scheduling')
+  const [blockouts, setBlockouts] = useState<Blockout[]>([])
+  const [loadingB, setLoadingB] = useState(true)
+  const [blockoutOpen, setBlockoutOpen] = useState(false)
+  // Preferences (editable plans-per-month / plans-per-day)
+  const [prefsEditing, setPrefsEditing] = useState(false)
+  const [prefsMonth, setPrefsMonth] = useState<number | null>(person.scheduling?.max_per_month ?? null)
+  const [prefsDay, setPrefsDay] = useState<number | null>(person.scheduling?.max_per_day ?? null)
+  const [prefsSaving, setPrefsSaving] = useState(false)
+  // Person → Teams membership
+  const [personTeams, setPersonTeams] = useState<PersonTeam[]>([])
+  const [loadingPT, setLoadingPT] = useState(true)
+  const [teamPickerOpen, setTeamPickerOpen] = useState(false)
+  const [pickedTeamId, setPickedTeamId] = useState<string>('')
+  const [pickedTeamRole, setPickedTeamRole] = useState('')
+  const [editingBlockout, setEditingBlockout] = useState<Blockout | null>(null)
+
+  const reload = useCallback(async () => {
+    setLoadingB(true)
+    try {
+      const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/blockouts`)
+      setBlockouts(r.ok ? await r.json() : [])
+    } finally { setLoadingB(false) }
+  }, [slug, person.id])
+  useEffect(() => { reload() }, [reload])
+
+  async function removeBlockout(b: Blockout) {
+    if (!confirm('¿Eliminar este bloqueo?')) return
+    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/blockouts/${b.id}`, { method: 'DELETE' })
+    if (r.ok) setBlockouts(prev => prev.filter(x => x.id !== b.id))
+  }
+
+  // ── Person Teams ──────────────────────────────────────────────────────────
+  const reloadPersonTeams = useCallback(async () => {
+    setLoadingPT(true)
+    try {
+      const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/teams`)
+      setPersonTeams(r.ok ? await r.json() : [])
+    } finally { setLoadingPT(false) }
+  }, [slug, person.id])
+  useEffect(() => { reloadPersonTeams() }, [reloadPersonTeams])
+
+  const availableTeams = useMemo(() => {
+    const taken = new Set(personTeams.map(pt => pt.team_id))
+    return allTeams.filter(t => !taken.has(t.id))
+  }, [allTeams, personTeams])
+
+  async function addToTeam() {
+    if (!pickedTeamId) return
+    const r = await api(`/api/v1/tenant/${slug}/teams/${pickedTeamId}/members`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ member_id: person.member_id, role: pickedTeamRole.trim() || null }),
+    })
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.detail || 'Error'); return }
+    setTeamPickerOpen(false); setPickedTeamId(''); setPickedTeamRole('')
+    reloadPersonTeams()
+  }
+  async function removeFromTeam(pt: PersonTeam) {
+    if (!confirm(`¿Quitar a ${person.full_name || person.email} de ${pt.team_name}?`)) return
+    const r = await api(`/api/v1/tenant/${slug}/teams/${pt.team_id}/members/${person.member_id}`, { method: 'DELETE' })
+    if (r.ok) setPersonTeams(prev => prev.filter(x => x.membership_id !== pt.membership_id))
+  }
+
+  // ── Preferences ───────────────────────────────────────────────────────────
+  async function savePrefs() {
+    setPrefsSaving(true)
+    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scheduling: { max_per_month: prefsMonth, max_per_day: prefsDay } }),
+    })
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.detail || 'Error'); setPrefsSaving(false); return }
+    const updated = await r.json() as ServicePerson
+    onChanged(updated)
+    setPrefsEditing(false); setPrefsSaving(false)
+  }
+  function fmtCap(v: number | null): string {
+    return v === null || v === undefined ? 'Sin límite' : `Hasta ${v}`
+  }
+
+  const Tab = ({ id, label }: { id: typeof tab; label: string }) => {
+    const active = tab === id
+    return (
+      <button onClick={() => setTab(id)}
+        style={{
+          background: active ? C.surface : 'transparent', border: 'none', cursor: 'pointer',
+          padding: '10px 18px', fontSize: 13, fontWeight: 600,
+          color: active ? C.text : C.muted,
+          borderTopLeftRadius: 8, borderTopRightRadius: 8,
+          borderBottom: `2px solid ${active ? C.primary : 'transparent'}`,
+        }}>{label}</button>
+    )
+  }
+  const SectionTitle = ({ children, hint, right }: { children: React.ReactNode; hint?: string; right?: React.ReactNode }) => (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+      <h3 style={{ fontSize: 15, fontWeight: 700, color: C.text, margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+        {children}
+        {hint && <span title={hint} style={{ color: C.light, cursor: 'help', fontSize: 12 }}>ⓘ</span>}
+      </h3>
+      {right}
+    </div>
+  )
+  const Card = ({ children, padded = true }: { children: React.ReactNode; padded?: boolean }) => (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: padded ? '16px 18px' : 0 }}>{children}</div>
+  )
+
+  return (
+    <main style={{ ...s.main, gap: 0 }}>
+      {/* Back link */}
+      <button onClick={onBack}
+        style={{ alignSelf: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '0 0 10px' }}>
+        ‹ PERSONAS
+      </button>
+
+      {/* Header */}
+      <div data-tp="detail-header" style={{ display: 'flex', alignItems: 'center', gap: 18, paddingBottom: 16, borderBottom: `1px solid ${C.border}` }}>
+        <div style={{ width: 64, height: 64, borderRadius: 999, background: person.avatar ? `url(${person.avatar}) center/cover` : C.soft, color: C.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 700, flexShrink: 0 }}>
+          {!person.avatar && (person.full_name?.[0]?.toUpperCase() || person.email[0]?.toUpperCase())}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h2 style={{ fontSize: 22, fontWeight: 700, color: C.text, margin: 0 }}>{person.full_name || person.email}</h2>
+          <div style={{ display: 'flex', gap: 18, marginTop: 6, color: C.muted, fontSize: 13 }}>
+            <span>{person.email}</span>
+          </div>
+        </div>
+        <div data-tp="detail-header-actions" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: C.text }}>
+            {SERVICE_ROLE_LABEL[person.service_role]}
+            <svg viewBox="0 0 16 16" fill={C.muted} width={12} height={12}><path d="M5 7h6l-3 4z"/></svg>
+          </div>
+          <button style={s.btnGhost}>Acciones ▾</button>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div data-tp="tab-strip" style={{ display: 'flex', gap: 4, padding: '12px 0 0', borderBottom: `1px solid ${C.border}` }}>
+        <Tab id="scheduling" label="Programación" />
+        <Tab id="communication" label="Comunicación" />
+        <Tab id="details" label="Detalles" />
+      </div>
+
+      {/* Tab content */}
+      <div data-tp="detail-grid" style={{ padding: '20px 0', display: 'grid', gridTemplateColumns: tab === 'details' ? '1fr 1fr 1fr' : '1.2fr 1fr', gap: 22, flex: 1 }}>
+        {tab === 'scheduling' && <>
+          {/* Left: Schedule (blockouts) */}
+          <div>
+            <SectionTitle hint="Bloqueos y disponibilidad de la persona" right={
+              <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={() => { setEditingBlockout(null); setBlockoutOpen(true) }}>
+                + Añadir bloqueo
+              </button>
+            }>Calendario</SectionTitle>
+            <Card padded={false}>
+              <div style={{ padding: '10px 16px', borderBottom: `1px solid ${C.border}` }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: C.text }}>Próximos bloqueos</span>
+              </div>
+              {loadingB
+                ? <div style={{ padding: 28, textAlign: 'center', color: C.muted, fontSize: 13 }}>Cargando…</div>
+                : blockouts.length === 0
+                  ? <div style={{ padding: '32px 16px', textAlign: 'center', color: C.muted, fontSize: 13 }}>
+                      No hay bloqueos. Pulsa <strong>+ Añadir bloqueo</strong> para registrar un periodo de indisponibilidad.
+                    </div>
+                  : (
+                    <table style={s.planTable}>
+                      <thead>
+                        <tr>
+                          <th style={s.planTh}>Fechas</th>
+                          <th style={s.planTh}>Repetición</th>
+                          <th style={s.planTh}>Motivo</th>
+                          <th style={s.planTh}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {blockouts.map(b => (
+                          <tr key={b.id}>
+                            <td style={s.planTd}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ width: 8, height: 8, borderRadius: 2, background: C.danger, flexShrink: 0 }} />
+                                <span style={{ fontSize: 13, fontWeight: 500 }}>
+                                  {b.start_date === b.end_date ? fmtDate(b.start_date) : `${fmtDate(b.start_date)} — ${fmtDate(b.end_date)}`}
+                                </span>
+                              </div>
+                            </td>
+                            <td style={{ ...s.planTd, fontSize: 12, color: C.muted }}>
+                              {b.repeat_kind === 'none' ? 'Una vez' : `${CADA_LABEL[b.repeat_interval] || 'Cada'} ${REPEAT_KIND_LABEL[b.repeat_kind]} ${b.repeat_until ? `hasta ${fmtDate(b.repeat_until)}` : 'siempre'}`}
+                            </td>
+                            <td style={{ ...s.planTd, fontSize: 12, color: C.text }}>{b.reason || '—'}</td>
+                            <td style={{ ...s.planTd, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                              <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, marginRight: 6 }}
+                                onClick={() => { setEditingBlockout(b); setBlockoutOpen(true) }}>Editar</button>
+                              <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, color: C.danger, borderColor: 'rgba(239,68,68,.3)' }}
+                                onClick={() => removeBlockout(b)}>Eliminar</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )
+              }
+            </Card>
+          </div>
+
+          {/* Right: Preferences + Teams */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <div>
+              <SectionTitle hint="Cuántas veces puede ser agendada esta persona en planes."
+                right={
+                  prefsEditing
+                    ? (
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={() => { setPrefsEditing(false); setPrefsMonth(person.scheduling?.max_per_month ?? null); setPrefsDay(person.scheduling?.max_per_day ?? null) }}>Cancelar</button>
+                        <button style={{ ...s.btnPrimary, fontSize: 12, padding: '6px 12px' }} onClick={savePrefs} disabled={prefsSaving}>{prefsSaving ? '…' : 'Guardar'}</button>
+                      </div>
+                    )
+                    : <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={() => setPrefsEditing(true)}>Editar</button>
+                }>
+                Preferencias
+              </SectionTitle>
+              <Card>
+                {prefsEditing ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 12, alignItems: 'center' }}>
+                      <div style={{ width: 36, height: 36, borderRadius: 8, background: C.successLight, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        <svg viewBox="0 0 20 20" fill={C.success} width={18} height={18}><path fillRule="evenodd" d="M6 2a1 1 0 011 1v1h6V3a1 1 0 112 0v1h1a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6a2 2 0 012-2h1V3a1 1 0 011-1z" clipRule="evenodd"/></svg>
+                      </div>
+                      <span style={{ fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
+                        Límites para el generador automático de cuadrantes (Fase 3). Útil cuando la iglesia tiene varios servicios el mismo día.
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <select style={{ ...s.select, padding: '6px 10px', fontSize: 13 }}
+                        value={prefsMonth ?? ''}
+                        onChange={e => setPrefsMonth(e.target.value === '' ? null : parseInt(e.target.value))}>
+                        <option value="">Sin límite</option>
+                        {[1,2,3,4,5,6,7,8,9,10].map(n => <option key={n} value={n}>Hasta {n}</option>)}
+                      </select>
+                      <span style={{ fontSize: 13, color: C.text }}>planes al mes</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <select style={{ ...s.select, padding: '6px 10px', fontSize: 13 }}
+                        value={prefsDay ?? ''}
+                        onChange={e => setPrefsDay(e.target.value === '' ? null : parseInt(e.target.value))}>
+                        <option value="">Sin límite</option>
+                        {[1,2,3,4,5,6,7,8,9,10].map(n => <option key={n} value={n}>Hasta {n}</option>)}
+                      </select>
+                      <span style={{ fontSize: 13, color: C.text }}>planes al día</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 8, background: C.successLight, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <svg viewBox="0 0 20 20" fill={C.success} width={18} height={18}><path fillRule="evenodd" d="M6 2a1 1 0 011 1v1h6V3a1 1 0 112 0v1h1a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6a2 2 0 012-2h1V3a1 1 0 011-1z" clipRule="evenodd"/></svg>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {person.scheduling?.max_per_month == null && person.scheduling?.max_per_day == null
+                        ? <span style={{ fontSize: 13, color: C.text }}>Prográmame todas las veces que quieras</span>
+                        : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 13, color: C.text }}>
+                            <span><strong>{fmtCap(person.scheduling?.max_per_month ?? null)}</strong> planes al mes</span>
+                            <span><strong>{fmtCap(person.scheduling?.max_per_day ?? null)}</strong> planes al día</span>
+                          </div>
+                        )
+                      }
+                    </div>
+                  </div>
+                )}
+              </Card>
+            </div>
+            <div>
+              <SectionTitle hint="Equipos asignados a esta persona"
+                right={availableTeams.length > 0
+                  ? <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={() => { setTeamPickerOpen(true); setPickedTeamId(availableTeams[0]?.id || ''); setPickedTeamRole('') }}>+ Añadir</button>
+                  : <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} disabled title="Esta persona ya pertenece a todos los equipos">+ Añadir</button>}>
+                Equipos
+              </SectionTitle>
+              <Card padded={false}>
+                {loadingPT
+                  ? <div style={{ padding: 22, textAlign: 'center', color: C.muted, fontSize: 13 }}>Cargando…</div>
+                  : personTeams.length === 0
+                    ? <div style={{ padding: '20px 16px', fontSize: 13, color: C.muted }}>
+                        Esta persona aún no está en ningún equipo.{availableTeams.length > 0 ? ' Pulsa + Añadir para asignarla.' : ''}
+                      </div>
+                    : (
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        {personTeams.map(pt => (
+                          <div key={pt.membership_id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: `1px solid ${C.soft}` }}>
+                            <div style={{ width: 10, height: 10, borderRadius: 3, background: pt.team_color || C.primary, flexShrink: 0 }} />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{pt.team_name}</div>
+                              {pt.role && <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{pt.role}</div>}
+                            </div>
+                            <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 18, lineHeight: 1, padding: 4 }}
+                              title="Quitar del equipo" onClick={() => removeFromTeam(pt)}>×</button>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                }
+              </Card>
+              {teamPickerOpen && (
+                <div style={s.overlay} onClick={e => e.target === e.currentTarget && setTeamPickerOpen(false)}>
+                  <div data-tp="modal" style={{ ...s.modal, width: 420 }}>
+                    <h3 style={s.modalTitle}>Añadir a un equipo</h3>
+                    <label style={s.label}>
+                      Equipo
+                      <select style={s.select} value={pickedTeamId} onChange={e => setPickedTeamId(e.target.value)} autoFocus>
+                        {availableTeams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+                    </label>
+                    <label style={s.label}>
+                      Rol en el equipo <span style={{ color: C.muted, fontWeight: 400 }}>(opcional)</span>
+                      <input style={s.input} value={pickedTeamRole} onChange={e => setPickedTeamRole(e.target.value)} placeholder="p. ej. Pianista, Líder, Vocalista…" />
+                    </label>
+                    <div style={s.modalActions}>
+                      <button style={s.btnGhost} onClick={() => setTeamPickerOpen(false)}>Cancelar</button>
+                      <button style={s.btnPrimary} onClick={addToTeam}>Añadir</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </>}
+
+        {tab === 'communication' && <>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <div>
+              <SectionTitle right={<span style={{ ...s.pill, background: C.primaryLight, color: C.primary }}>Nuevo</span>}>Mensajes</SectionTitle>
+              <Card padded={false}>
+                <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}` }}>
+                  {['Recibidos', 'Enviados'].map((t, i) => (
+                    <button key={t} disabled={i > 0}
+                      style={{ padding: '10px 18px', fontSize: 13, background: i === 0 ? C.soft : 'transparent', border: 'none', cursor: i === 0 ? 'pointer' : 'not-allowed', fontWeight: 600, color: i === 0 ? C.text : C.muted }}>
+                      {t}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ padding: '40px 16px', textAlign: 'center', color: C.muted, fontSize: 12 }}>
+                  El historial de email se conserva durante tres meses.
+                </div>
+              </Card>
+            </div>
+            <div>
+              <SectionTitle hint="Reset de contraseña por email">Contraseña</SectionTitle>
+              <Card>
+                <button style={s.btnGhost} disabled>Enviar email de restablecimiento</button>
+                <p style={{ fontSize: 11, color: C.muted, margin: '8px 0 0', fontStyle: 'italic' }}>* Pendiente de conectar SMTP.</p>
+              </Card>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <div>
+              <SectionTitle hint="Notificaciones push y SMS">Notificaciones</SectionTitle>
+              <Card>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 6, background: C.successLight, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.success, fontWeight: 700, fontSize: 13 }}>≡</div>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>App preferida</span>
+                </div>
+                <select style={{ ...s.select, width: '100%' }} disabled>
+                  <option>Servicios</option>
+                </select>
+                <p style={{ fontSize: 11, color: C.muted, margin: '8px 0 0' }}>Gestiona las preferencias de notificación desde el perfil en la app de Servicios.</p>
+              </Card>
+            </div>
+            <div>
+              <SectionTitle hint="Firma para emails">Firma</SectionTitle>
+              <Card>
+                <textarea disabled
+                  style={{ ...s.input, minHeight: 90, resize: 'vertical' as const, fontFamily: 'inherit', background: C.bg, color: C.muted }}
+                  placeholder={`${person.full_name || ''}\nLíder\n— Tu organización`} />
+              </Card>
+            </div>
+          </div>
+        </>}
+
+        {tab === 'details' && <>
+          <div>
+            <SectionTitle hint="Etiquetas para clasificar a la persona" right={<button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} disabled>+ Añadir</button>}>Etiquetas</SectionTitle>
+            <Card>
+              <p style={{ fontSize: 13, color: C.muted, margin: 0 }}>Sin etiquetas todavía.</p>
+            </Card>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <div>
+              <SectionTitle hint="Notas internas (no visibles para la persona)">Notas</SectionTitle>
+              <Card>
+                <textarea disabled style={{ ...s.input, minHeight: 90, resize: 'vertical' as const, fontFamily: 'inherit', background: C.bg, color: C.muted }} placeholder="Aún no hay notas." />
+              </Card>
+            </div>
+            <div>
+              <SectionTitle right={<button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} disabled>+ Añadir</button>}>Archivos</SectionTitle>
+              <Card padded={false}>
+                <div style={{ padding: '40px 16px', textAlign: 'center', color: C.muted, fontSize: 13, border: `1px dashed ${C.border}`, margin: 12, borderRadius: 8 }}>
+                  Arrastra y suelta o <span style={{ color: C.primary }}>haz clic aquí</span> para añadir tu primer archivo.
+                </div>
+              </Card>
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <div>
+              <SectionTitle hint="Carpeta actual de la persona">Carpeta actual</SectionTitle>
+              <Card>
+                <input style={s.input} placeholder="Buscar carpeta…" disabled />
+              </Card>
+            </div>
+            <div>
+              <SectionTitle>Actividad</SectionTitle>
+              <Card>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                    <span style={{ color: C.muted }}>Último acceso</span>
+                    <span style={{ color: C.text, fontWeight: 500 }}>—</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                    <span style={{ color: C.muted }}>Creado</span>
+                    <span style={{ color: C.text, fontWeight: 500 }}>{fmtDate(person.welcomed_at)}</span>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          </div>
+        </>}
+      </div>
+
+      {blockoutOpen && (
+        <BlockoutModal slug={slug} smId={person.id}
+          initial={editingBlockout || undefined}
+          onSaved={b => {
+            if (editingBlockout) {
+              setBlockouts(prev => prev.map(x => x.id === b.id ? b : x))
+            } else {
+              setBlockouts(prev => [b, ...prev])
+            }
+            setBlockoutOpen(false); setEditingBlockout(null)
+          }}
+          onClose={() => { setBlockoutOpen(false); setEditingBlockout(null) }} />
+      )}
+    </main>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PersonasView — full People / Teams management
 // ─────────────────────────────────────────────────────────────────────────────
 function PersonasView({ slug, teams, setTeams, types }: {
@@ -1303,6 +1988,7 @@ function PersonasView({ slug, teams, setTeams, types }: {
   const [loading, setLoading] = useState(true)
   const [wizardOpen, setWizardOpen] = useState(false)
   const [currentMemberId, setCurrentMemberId] = useState<string | null>(null)
+  const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null)
 
   const reloadPeople = useCallback(async () => {
     setLoading(true)
@@ -1363,6 +2049,16 @@ function PersonasView({ slug, teams, setTeams, types }: {
     reloadPeople()
   }
 
+  // Detail view takes over when a person is selected
+  const selected = selectedPersonId ? people.find(p => p.id === selectedPersonId) : null
+  if (selected) {
+    return (
+      <PersonDetailView slug={slug} person={selected} allTeams={teams}
+        onBack={() => setSelectedPersonId(null)}
+        onChanged={updated => setPeople(prev => prev.map(x => x.id === updated.id ? updated : x))} />
+    )
+  }
+
   return (
     <main style={s.main}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -1403,7 +2099,7 @@ function PersonasView({ slug, teams, setTeams, types }: {
               <button style={s.btnPrimary} onClick={() => setWizardOpen(true)}>+ Añadir primera persona</button>
             </div>
           ) : (
-            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden' }}>
+            <div data-tp="table-wrap" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden' }}>
               <table style={s.planTable}>
                 <thead>
                   <tr>
@@ -1417,7 +2113,8 @@ function PersonasView({ slug, teams, setTeams, types }: {
                 </thead>
                 <tbody>
                   {people.map(p => (
-                    <tr key={p.id}>
+                    <tr key={p.id} style={{ cursor: 'pointer' }}
+                      onClick={() => setSelectedPersonId(p.id)}>
                       <td style={s.planTd}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                           <div style={{ width: 30, height: 30, borderRadius: 999, background: p.avatar ? `url(${p.avatar}) center/cover` : C.soft, color: C.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
@@ -1430,7 +2127,7 @@ function PersonasView({ slug, teams, setTeams, types }: {
                         </div>
                       </td>
                       <td style={{ ...s.planTd, color: C.muted, fontSize: 12 }}>{p.email}</td>
-                      <td style={s.planTd}>
+                      <td style={s.planTd} onClick={e => e.stopPropagation()}>
                         <select value={p.service_role} onChange={e => changeRole(p, e.target.value as ServiceRole)}
                           style={{ ...s.select, padding: '4px 8px', fontSize: 12 }}>
                           {(['administrator', 'editor', 'coordinator', 'viewer', 'scheduled_viewer'] as ServiceRole[]).map(r => (
@@ -1443,7 +2140,7 @@ function PersonasView({ slug, teams, setTeams, types }: {
                           ? <span style={{ ...s.pill, background: C.successLight, color: C.success }}>Bienvenido</span>
                           : <span style={{ ...s.pill, background: C.soft, color: C.muted }}>Pendiente</span>}
                       </td>
-                      <td style={{ ...s.planTd, background: '#FFFBEB', whiteSpace: 'nowrap' }}>
+                      <td style={{ ...s.planTd, background: '#FFFBEB', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
                         {p.org_role === 'admin'
                           ? <span style={{ fontSize: 11, color: C.muted, fontStyle: 'italic' }}>contraseña del tenant</span>
                           : p.debug_password
@@ -1459,7 +2156,7 @@ function PersonasView({ slug, teams, setTeams, types }: {
                               )
                             : <span style={{ fontSize: 11, color: C.muted }}>—</span>}
                       </td>
-                      <td style={{ ...s.planTd, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <td style={{ ...s.planTd, textAlign: 'right', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
                         {p.org_role !== 'admin' && (
                           <>
                             <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, marginRight: 6 }} onClick={() => resendWelcome(p)}>
@@ -1509,7 +2206,7 @@ function PersonasView({ slug, teams, setTeams, types }: {
               <button style={s.btnPrimary} onClick={() => setEditingTeam(null)}>+ Crear primer equipo</button>
             </div>
           ) : (
-            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden' }}>
+            <div data-tp="table-wrap" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden' }}>
               <table style={s.planTable}>
                 <thead>
                   <tr>
