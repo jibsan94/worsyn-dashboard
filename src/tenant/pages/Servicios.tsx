@@ -10,6 +10,7 @@
  * 'personas' tab implements Teams CRUD + add/remove team memberships.
  */
 import React, { useEffect, useMemo, useState, useCallback } from 'react'
+import ReactDOM from 'react-dom'
 import { useParams } from 'react-router-dom'
 
 export type ServiciosTab = 'mi-planificacion' | 'servicios' | 'canciones' | 'media' | 'personas'
@@ -139,6 +140,7 @@ function CreateTypeWizard({ slug, teams, onCreated, onClose }: {
   const [teamIds, setTeamIds] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  useEscape(onClose)
 
   function next() {
     setErr('')
@@ -990,6 +992,7 @@ function AddPersonWizard({ slug, types, orgMembers, existingMemberIds, onCreated
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [createdTempPassword, setCreatedTempPassword] = useState<string | null>(null)
+  useEscape(onClose)
 
   const availableMembers = useMemo(() => {
     const q = pickerSearch.trim().toLowerCase()
@@ -1397,6 +1400,7 @@ function BlockoutModal({ slug, smId, initial, onSaved, onClose }: {
   const [reason, setReason] = useState(initial?.reason || '')
   const [busy, setBusy] = useState(false)
   const [err, setErr]   = useState('')
+  useEscape(onClose)
 
   // Selection during calendar interaction
   const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d })
@@ -1603,19 +1607,50 @@ function Card({ children, padded = true }: { children: React.ReactNode; padded?:
 // ─────────────────────────────────────────────────────────────────────────────
 function VariablePicker({ onInsert, anchorRight = false, allowedGroups }: {
   onInsert: (tok: string) => void
-  anchorRight?: boolean
+  anchorRight?: boolean   // Anchor dropdown to the right edge of the trigger
   allowedGroups?: string[]  // restrict to these group labels (e.g. ['Destinatario', 'Organización'])
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
-  const ref = React.useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  const btnRef = React.useRef<HTMLButtonElement>(null)
+  const popRef = React.useRef<HTMLDivElement>(null)
   const searchRef = React.useRef<HTMLInputElement>(null)
+
+  // Position the popover next to the trigger using fixed coords so it escapes
+  // any ancestor `overflow: hidden` (e.g. the email modal).
+  function placePopover() {
+    const b = btnRef.current?.getBoundingClientRect()
+    if (!b) return
+    const W = 340, H = 420
+    let left = anchorRight ? b.right - W : b.left
+    let top = b.bottom + 4
+    // Clamp into viewport
+    if (left + W > window.innerWidth - 8) left = window.innerWidth - W - 8
+    if (left < 8) left = 8
+    if (top + H > window.innerHeight - 8) top = b.top - H - 4
+    if (top < 8) top = 8
+    setPos({ top, left })
+  }
   useEffect(() => {
     if (!open) return
-    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    placePopover()
+    const h = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (popRef.current && popRef.current.contains(t)) return
+      if (btnRef.current && btnRef.current.contains(t)) return
+      setOpen(false)
+    }
+    const onScroll = () => placePopover()
     document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
-  }, [open])
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onScroll)
+    return () => {
+      document.removeEventListener('mousedown', h)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onScroll)
+    }
+  }, [open, anchorRight])
   useEffect(() => { if (open) setTimeout(() => searchRef.current?.focus(), 30) }, [open])
 
   const filtered = useMemo(() => {
@@ -1631,14 +1666,14 @@ function VariablePicker({ onInsert, anchorRight = false, allowedGroups }: {
   const totalShown = filtered.reduce((n, g) => n + g.vars.length, 0)
 
   return (
-    <div ref={ref} style={{ position: 'relative', display: 'inline-flex' }}>
-      <button type="button" onClick={() => setOpen(o => !o)}
+    <>
+      <button ref={btnRef} type="button" onClick={() => setOpen(o => !o)}
         style={{ ...s.btnGhost, fontSize: 12, padding: '4px 10px', display: 'inline-flex', gap: 4 }}>
         {'{}'} Variable
       </button>
-      {open && (
-        <div style={{
-          position: 'absolute', top: 'calc(100% + 4px)', [anchorRight ? 'right' : 'left']: 0, zIndex: 300,
+      {open && pos && ReactDOM.createPortal(
+        <div ref={popRef} style={{
+          position: 'fixed', top: pos.top, left: pos.left, zIndex: 9999,
           background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.12)',
           width: 340, maxHeight: 420, display: 'flex', flexDirection: 'column',
         }}>
@@ -1671,9 +1706,10 @@ function VariablePicker({ onInsert, anchorRight = false, allowedGroups }: {
           <div style={{ borderTop: `1px solid ${C.border}`, padding: '8px 10px', fontSize: 11, color: C.muted }}>
             Catálogo completo en <code>artifacts/EMAIL-VARIABLES.md</code>.
           </div>
-        </div>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   )
 }
 
@@ -1682,12 +1718,63 @@ function VariablePicker({ onInsert, anchorRight = false, allowedGroups }: {
 // Uses execCommand (deprecated but supported everywhere). For sanitization:
 // only admin/leader/coordinator/svc-editor can compose, so we trust the markup.
 // ─────────────────────────────────────────────────────────────────────────────
-const RICH_BTN: React.CSSProperties = {
-  background: 'none', border: 'none', cursor: 'pointer', color: C.muted,
-  padding: '4px 8px', fontSize: 13, borderRadius: 5, minWidth: 28, height: 28,
-  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-}
 const RICH_SEP: React.CSSProperties = { width: 1, alignSelf: 'stretch', background: C.border, margin: '4px 4px' }
+
+// Global stylesheet for the rich editor — injected once. Covers:
+//   • Lists (default UA marker is fine but `outline: none` on the editor + some
+//     resets hide them in some setups; force list-style explicitly).
+//   • Links (blue + underline so they look like links inside the editor + view).
+//   • Toolbar button hover/active states.
+//   • Placeholder via :empty + data-placeholder.
+function useRichEditorStyles() {
+  useEffect(() => {
+    const id = 'worsyn-rich-styles'
+    if (document.getElementById(id)) return
+    const el = document.createElement('style')
+    el.id = id
+    el.textContent = `
+.worsyn-rich { position: relative; }
+.worsyn-rich ul { list-style: disc outside; padding-left: 1.4em; margin: 6px 0; }
+.worsyn-rich ol { list-style: decimal outside; padding-left: 1.4em; margin: 6px 0; }
+.worsyn-rich li { margin: 2px 0; }
+.worsyn-rich a { color: #4F46E5; text-decoration: underline; cursor: pointer; }
+.worsyn-rich h2 { font-size: 18px; font-weight: 700; margin: 10px 0 6px; }
+.worsyn-rich h3 { font-size: 15px; font-weight: 700; margin: 8px 0 4px; color: #334155; }
+.worsyn-rich p  { margin: 4px 0; }
+.worsyn-rich img { max-width: 100%; height: auto; border-radius: 4px; display: inline-block; vertical-align: middle; }
+.worsyn-rich hr { border: none; border-top: 1px solid #CBD5E1; margin: 14px 0; }
+.worsyn-rich:empty::before {
+  content: attr(data-placeholder); color: #94A3B8; pointer-events: none;
+}
+.worsyn-rich-btn { background: none; border: none; cursor: pointer; color: #64748B;
+  padding: 4px 8px; font-size: 13px; border-radius: 5px; min-width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 100ms, color 100ms; }
+.worsyn-rich-btn:hover { background: #E2E8F0; color: #0F172A; }
+.worsyn-rich-btn[aria-pressed="true"] { background: #EEF2FF; color: #4F46E5; }
+/* HTML rendered in view modals/previews */
+.worsyn-rich-render ul { list-style: disc outside; padding-left: 1.4em; margin: 6px 0; }
+.worsyn-rich-render ol { list-style: decimal outside; padding-left: 1.4em; margin: 6px 0; }
+.worsyn-rich-render a  { color: #4F46E5; text-decoration: underline; }
+.worsyn-rich-render h2 { font-size: 17px; font-weight: 700; margin: 8px 0 4px; }
+.worsyn-rich-render h3 { font-size: 14px; font-weight: 700; margin: 6px 0 3px; color: #334155; }
+.worsyn-rich-render img { max-width: 100%; height: auto; border-radius: 4px; display: inline-block; vertical-align: middle; }
+.worsyn-rich-render hr  { border: none; border-top: 1px solid #CBD5E1; margin: 14px 0; }
+`
+    document.head.appendChild(el)
+  }, [])
+}
+
+// Closes the wrapping modal when the user hits Escape. Use in every modal that
+// has an onClose. Skips if the active element is contenteditable or input —
+// Escape should clear typing context first (browsers handle that), then close.
+function useEscape(handler: () => void) {
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); handler() } }
+    document.addEventListener('keydown', h)
+    return () => document.removeEventListener('keydown', h)
+  }, [handler])
+}
 
 export interface RichTextEditorHandle { insert: (html: string) => void; focus: () => void }
 
@@ -1698,8 +1785,12 @@ const RichTextEditor = React.forwardRef<RichTextEditorHandle, {
   extraToolbar?: React.ReactNode  // e.g. the VariablePicker
   minHeight?: number
 }>(function RichTextEditor({ value, onChange, placeholder, extraToolbar, minHeight = 200 }, ref) {
+  useRichEditorStyles()
   const editorRef = React.useRef<HTMLDivElement>(null)
   const savedRangeRef = React.useRef<Range | null>(null)
+  // Track which commands are currently active at the caret.
+  const [active, setActive] = useState<{ [k: string]: boolean }>({})
+
   // Mount-only innerHTML so React doesn't fight the caret on every keystroke.
   useEffect(() => {
     if (editorRef.current && editorRef.current.innerHTML !== value) {
@@ -1708,6 +1799,24 @@ const RichTextEditor = React.forwardRef<RichTextEditorHandle, {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  function refreshActive() {
+    const sel = window.getSelection()
+    if (!sel || !editorRef.current) return
+    if (sel.rangeCount > 0 && !editorRef.current.contains(sel.getRangeAt(0).commonAncestorContainer)) return
+    try {
+      setActive({
+        bold: document.queryCommandState('bold'),
+        italic: document.queryCommandState('italic'),
+        underline: document.queryCommandState('underline'),
+        insertUnorderedList: document.queryCommandState('insertUnorderedList'),
+        insertOrderedList: document.queryCommandState('insertOrderedList'),
+        justifyLeft: document.queryCommandState('justifyLeft'),
+        justifyCenter: document.queryCommandState('justifyCenter'),
+        justifyRight: document.queryCommandState('justifyRight'),
+      })
+    } catch { /* queryCommandState can throw in some browsers; ignore */ }
+  }
+
   function saveSelection() {
     const sel = window.getSelection()
     if (!sel || sel.rangeCount === 0) return
@@ -1715,6 +1824,7 @@ const RichTextEditor = React.forwardRef<RichTextEditorHandle, {
     if (editorRef.current && editorRef.current.contains(r.commonAncestorContainer)) {
       savedRangeRef.current = r.cloneRange()
     }
+    refreshActive()
   }
   function restoreSelection() {
     const r = savedRangeRef.current
@@ -1734,11 +1844,33 @@ const RichTextEditor = React.forwardRef<RichTextEditorHandle, {
     onChange((e.target as HTMLDivElement).innerHTML)
     saveSelection()
   }
+  function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    const meta = e.metaKey || e.ctrlKey
+    if (meta) {
+      // Force-handle B/I/U — relying on the browser default leaves them
+      // unresponsive in some setups (Chromium + complex React trees skip them).
+      const k = e.key.toLowerCase()
+      if (k === 'b') { e.preventDefault(); exec('bold');      return }
+      if (k === 'i') { e.preventDefault(); exec('italic');    return }
+      if (k === 'u') { e.preventDefault(); exec('underline'); return }
+      if (k === 'k') { e.preventDefault(); promptLink();      return }
+    }
+    // Tab → nest (esp. inside lists). Shift+Tab → un-nest. Always indent
+    // even outside a list so we don't trap focus inside the editor.
+    if (e.key === 'Tab') {
+      e.preventDefault()
+      exec(e.shiftKey ? 'outdent' : 'indent')
+      return
+    }
+  }
   function promptLink() {
     saveSelection()
     const url = window.prompt('URL del enlace (https://…)')
     if (!url) return
     exec('createLink', url)
+    // Default <a> rendering in contentEditable inherits color/decoration from
+    // the editor — our .worsyn-rich CSS forces blue + underline so they look
+    // like real links both inside the editor and in the rendered output.
   }
   function insertHTML(html: string) {
     editorRef.current?.focus()
@@ -1747,47 +1879,118 @@ const RichTextEditor = React.forwardRef<RichTextEditorHandle, {
     if (editorRef.current) onChange(editorRef.current.innerHTML)
     saveSelection()
   }
+  // ── Images ────────────────────────────────────────────────────────────────
+  const IMG_MAX = 1 * 1024 * 1024  // 1 MB
+  const imgFileRef = React.useRef<HTMLInputElement>(null)
+  function handleImageFile(file: File): boolean {
+    if (!file.type.startsWith('image/')) {
+      alert('Solo se admiten imágenes (JPG, PNG, WebP, GIF…).')
+      return false
+    }
+    if (file.size > IMG_MAX) {
+      alert(`La imagen pesa ${(file.size / 1024 / 1024).toFixed(2)} MB y el máximo permitido es 1 MB.\nReduce su tamaño antes de insertarla.`)
+      return false
+    }
+    const r = new FileReader()
+    r.onload = () => {
+      if (typeof r.result !== 'string') return
+      const safeAlt = (file.name || 'imagen').replace(/"/g, '')
+      insertHTML(`<img src="${r.result}" alt="${safeAlt}" />`)
+    }
+    r.onerror = () => alert('No se pudo leer la imagen.')
+    r.readAsDataURL(file)
+    return true
+  }
+  function onPaste(e: React.ClipboardEvent<HTMLDivElement>) {
+    // Look for an image in the clipboard — if found, intercept and insert.
+    // Plain text/HTML paste falls through to the browser default.
+    const items = e.clipboardData?.items
+    if (!items) return
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i]
+      if (it.kind === 'file' && it.type.startsWith('image/')) {
+        const f = it.getAsFile()
+        if (f) {
+          e.preventDefault()
+          handleImageFile(f)
+          return
+        }
+      }
+    }
+  }
 
   React.useImperativeHandle(ref, () => ({
     insert: insertHTML,
     focus: () => { editorRef.current?.focus(); restoreSelection() },
   }), [])
 
+  function btn(cmd: string, label: React.ReactNode, title: string, extra?: React.CSSProperties) {
+    const pressed = !!active[cmd]
+    return (
+      <button type="button" title={title} aria-pressed={pressed}
+        className="worsyn-rich-btn"
+        onClick={() => exec(cmd)}
+        style={extra}>{label}</button>
+    )
+  }
+
   return (
     <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: '#fff' }}>
       <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', padding: 4, borderBottom: `1px solid ${C.border}`, gap: 1, background: C.bg, borderRadius: '8px 8px 0 0' }}
         // Prevent toolbar buttons from stealing focus (and losing the selection).
         onMouseDown={e => { saveSelection(); e.preventDefault() }}>
-        <button type="button" title="Negrita (Ctrl+B)" onClick={() => exec('bold')} style={{ ...RICH_BTN, fontWeight: 700 }}>B</button>
-        <button type="button" title="Cursiva (Ctrl+I)" onClick={() => exec('italic')} style={{ ...RICH_BTN, fontStyle: 'italic' }}>I</button>
-        <button type="button" title="Subrayado (Ctrl+U)" onClick={() => exec('underline')} style={{ ...RICH_BTN, textDecoration: 'underline' }}>U</button>
+        {btn('bold',      <b>B</b>,                          'Negrita (⌘/Ctrl + B)')}
+        {btn('italic',    <i style={{ fontFamily: 'Georgia, serif' }}>I</i>, 'Cursiva (⌘/Ctrl + I)')}
+        {btn('underline', <u>U</u>,                          'Subrayado (⌘/Ctrl + U)')}
         <span style={RICH_SEP} />
-        <select title="Estilo" onChange={e => { if (e.target.value) { exec('formatBlock', e.target.value); e.target.value = '' } }}
-          style={{ ...RICH_BTN, padding: '4px 6px', minWidth: 78, cursor: 'pointer' }}>
+        <select title="Estilo de bloque"
+          className="worsyn-rich-btn"
+          onChange={e => { if (e.target.value) { exec('formatBlock', e.target.value); e.target.value = '' } }}
+          style={{ padding: '4px 6px', minWidth: 78, cursor: 'pointer' }}>
           <option value="">Estilo</option>
           <option value="h2">Título</option>
           <option value="h3">Subtítulo</option>
           <option value="p">Párrafo</option>
         </select>
         <span style={RICH_SEP} />
-        <button type="button" title="Lista" onClick={() => exec('insertUnorderedList')} style={RICH_BTN}>• ≡</button>
-        <button type="button" title="Lista numerada" onClick={() => exec('insertOrderedList')} style={RICH_BTN}>1.</button>
+        {btn('insertUnorderedList', '• ≡', 'Lista con viñetas')}
+        {btn('insertOrderedList',   '1.',  'Lista numerada')}
+        <button type="button" title="Aumentar sangría (Tab)" className="worsyn-rich-btn"
+          onClick={() => exec('indent')}>
+          <svg viewBox="0 0 16 16" width={14} height={14} fill="currentColor"><path d="M0 2h16v1.4H0zM5 6h11v1.4H5zM5 9h11v1.4H5zM0 12.6h16V14H0zM0 6.7l3 2.3-3 2.3z"/></svg>
+        </button>
+        <button type="button" title="Reducir sangría (Shift+Tab)" className="worsyn-rich-btn"
+          onClick={() => exec('outdent')}>
+          <svg viewBox="0 0 16 16" width={14} height={14} fill="currentColor"><path d="M0 2h16v1.4H0zM0 6h11v1.4H0zM0 9h11v1.4H0zM0 12.6h16V14H0zM16 6.7l-3 2.3 3 2.3z"/></svg>
+        </button>
         <span style={RICH_SEP} />
-        <button type="button" title="Alinear izquierda" onClick={() => exec('justifyLeft')} style={RICH_BTN}>⇤</button>
-        <button type="button" title="Centrar" onClick={() => exec('justifyCenter')} style={RICH_BTN}>↔</button>
-        <button type="button" title="Alinear derecha" onClick={() => exec('justifyRight')} style={RICH_BTN}>⇥</button>
+        {btn('justifyLeft',   '⇤', 'Alinear izquierda')}
+        {btn('justifyCenter', '↔', 'Centrar')}
+        {btn('justifyRight',  '⇥', 'Alinear derecha')}
+        <button type="button" title="Línea horizontal" className="worsyn-rich-btn"
+          onClick={() => exec('insertHorizontalRule')}>
+          <svg viewBox="0 0 16 16" width={14} height={14} fill="currentColor"><path d="M1 7.6h14v1.2H1z"/></svg>
+        </button>
         <span style={RICH_SEP} />
-        <label title="Color del texto" style={{ ...RICH_BTN, padding: 0, cursor: 'pointer', position: 'relative' }}>
+        <label title="Color del texto"
+          className="worsyn-rich-btn"
+          style={{ padding: 0, cursor: 'pointer', position: 'relative' }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: C.primary, padding: '0 6px' }}>A</span>
           <input type="color" onChange={e => exec('foreColor', e.target.value)}
             style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
         </label>
-        <button type="button" title="Insertar enlace" onClick={promptLink} style={RICH_BTN}>🔗</button>
-        <button type="button" title="Quitar formato" onClick={() => exec('removeFormat')} style={RICH_BTN}>Tₓ</button>
+        <button type="button" title="Insertar enlace (⌘/Ctrl + K)" className="worsyn-rich-btn" onClick={promptLink}>🔗</button>
+        <button type="button" title="Insertar imagen (máx. 1 MB · o pega desde el portapapeles)"
+          className="worsyn-rich-btn" onClick={() => imgFileRef.current?.click()}>🖼️</button>
+        <input ref={imgFileRef} type="file" accept="image/*" style={{ display: 'none' }}
+          onChange={e => { const f = e.target.files?.[0]; if (f) handleImageFile(f); e.target.value = '' }} />
+        <button type="button" title="Quitar formato" className="worsyn-rich-btn" onClick={() => exec('removeFormat')}>Tₓ</button>
         {extraToolbar && (<><span style={RICH_SEP} />{extraToolbar}</>)}
       </div>
       <div ref={editorRef} contentEditable suppressContentEditableWarning
+        className="worsyn-rich"
         onInput={onInput} onBlur={saveSelection} onKeyUp={saveSelection} onMouseUp={saveSelection}
+        onKeyDown={onKeyDown} onPaste={onPaste}
         data-placeholder={placeholder}
         style={{
           minHeight, padding: '12px 14px', outline: 'none', fontSize: 14, lineHeight: 1.6, color: C.text,
@@ -1815,6 +2018,7 @@ function ComposeEmailModal({ slug, defaultRecipient, onClose, onSent }: {
   const bodyRef = React.useRef<RichTextEditorHandle>(null)
   const subjectRef = React.useRef<HTMLInputElement>(null)
   const [bodyKey, setBodyKey] = useState(0)   // bumps to remount editor when template applied
+  useEscape(onClose)
 
   const reloadTemplates = useCallback(async () => {
     const r = await api(`/api/v1/tenant/${slug}/email/templates`)
@@ -1861,59 +2065,72 @@ function ComposeEmailModal({ slug, defaultRecipient, onClose, onSent }: {
 
   return (
     <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div data-tp="wizard-modal" style={{ ...s.modal, width: 680 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div data-tp="wizard-modal" style={{ ...s.modal, width: 680, padding: 0, gap: 0 }}>
+        {/* Header (sticky) */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 28px 14px', borderBottom: `1px solid ${C.border}` }}>
           <h3 style={s.modalTitle}>Enviar correo</h3>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: C.muted, lineHeight: 1 }}>✕</button>
         </div>
 
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <select style={{ ...s.select, flex: 1 }} value={tplId} onChange={e => applyTemplate(e.target.value)}>
-            <option value="">— Sin plantilla (empezar en blanco) —</option>
-            {templates.map(t => (
-              <option key={t.id} value={t.id}>{KIND_LABEL[t.kind]} · {t.name}</option>
-            ))}
-          </select>
-          <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 12px' }} onClick={() => setTemplatesOpen(true)}>
-            Editar plantillas ›
-          </button>
-        </div>
-
-        <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 13, color: C.text }}>
-          <strong>Para:</strong> {defaultRecipient.full_name || defaultRecipient.email}
-          <span style={{ color: C.muted, marginLeft: 8 }}>&lt;{defaultRecipient.email}&gt;</span>
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <label style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>Asunto</label>
-            <VariablePicker onInsert={insertIntoSubject} anchorRight />
+        {/* Scrollable middle */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '14px 28px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <select style={{ ...s.select, flex: 1 }} value={tplId} onChange={e => applyTemplate(e.target.value)}>
+              <option value="">— Sin plantilla (empezar en blanco) —</option>
+              {templates.map(t => (
+                <option key={t.id} value={t.id}>{KIND_LABEL[t.kind]} · {t.name}</option>
+              ))}
+            </select>
+            <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 12px' }} onClick={() => setTemplatesOpen(true)}>
+              Editar plantillas ›
+            </button>
           </div>
-          <input ref={subjectRef} style={s.input} value={subject} onChange={e => setSubject(e.target.value)}
-            placeholder="p. ej. ¡Bienvenido(a) a {{ organization.name }}!" />
-        </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <label style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>Cuerpo</label>
-          <RichTextEditor key={bodyKey} ref={bodyRef} value={body} onChange={setBody}
-            placeholder="Hola {{ to.first_name }}, …"
-            minHeight={220}
-            extraToolbar={<VariablePicker onInsert={insertIntoBody} anchorRight />} />
-        </div>
-
-        {preview && (
-          <div style={{ border: `1.5px solid ${C.primary}`, borderRadius: 10, padding: '12px 14px', background: C.primaryLight }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: C.primary, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>Vista previa renderizada</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 6 }}>{preview.subject || <em style={{ color: C.muted, fontWeight: 400 }}>(sin asunto)</em>}</div>
-            {preview.body
-              ? <div style={{ fontSize: 13, color: C.text, lineHeight: 1.55 }} dangerouslySetInnerHTML={{ __html: preview.body }} />
-              : <em style={{ color: C.muted, fontSize: 13 }}>(sin cuerpo)</em>}
+          <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 13, color: C.text }}>
+            <strong>Para:</strong> {defaultRecipient.full_name || defaultRecipient.email}
+            <span style={{ color: C.muted, marginLeft: 8 }}>&lt;{defaultRecipient.email}&gt;</span>
           </div>
-        )}
 
-        {err && <p style={s.errorText}>{err}</p>}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>Asunto</label>
+              <VariablePicker onInsert={insertIntoSubject} anchorRight />
+            </div>
+            <input ref={subjectRef} style={s.input} value={subject} onChange={e => setSubject(e.target.value)}
+              placeholder="p. ej. ¡Bienvenido(a) a {{ organization.name }}!" />
+          </div>
 
-        <div style={s.modalActions}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>Cuerpo</label>
+            <RichTextEditor key={bodyKey} ref={bodyRef} value={body} onChange={setBody}
+              placeholder="Hola {{ to.first_name }}, …"
+              minHeight={220}
+              extraToolbar={<VariablePicker onInsert={insertIntoBody} anchorRight />} />
+          </div>
+
+          {preview && (
+            <div style={{ border: `1.5px solid ${C.primary}`, borderRadius: 10, padding: '14px 16px', background: '#fff' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingBottom: 8, borderBottom: `1px solid ${C.soft}` }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.primary, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Vista previa del correo</div>
+                <button onClick={() => setPreview(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 12 }}>✕ Cerrar</button>
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>
+                <strong style={{ color: C.text }}>Para:</strong> {defaultRecipient.full_name || defaultRecipient.email} &lt;{defaultRecipient.email}&gt;
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 12 }}>
+                {preview.subject || <em style={{ color: C.muted, fontWeight: 400 }}>(sin asunto)</em>}
+              </div>
+              {preview.body
+                ? <div className="worsyn-rich-render" style={{ fontSize: 14, color: C.text, lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: preview.body }} />
+                : <em style={{ color: C.muted, fontSize: 13 }}>(sin cuerpo)</em>}
+            </div>
+          )}
+
+          {err && <p style={s.errorText}>{err}</p>}
+        </div>
+
+        {/* Footer (sticky) */}
+        <div style={{ ...s.modalActions, padding: '14px 28px 18px', borderTop: `1px solid ${C.border}`, marginTop: 0 }}>
           <button style={s.btnGhost} onClick={onClose}>Cancelar</button>
           <div style={{ display: 'flex', gap: 8 }}>
             <button style={s.btnGhost} onClick={doPreview}>Vista previa</button>
@@ -1935,6 +2152,7 @@ function TemplatesManagerModal({ slug, onClose }: { slug: string; onClose: () =>
   const [templates, setTemplates] = useState<EmailTemplate[]>([])
   const [editing, setEditing] = useState<EmailTemplate | null | undefined>(undefined) // undefined closed, null create
   const [busy, setBusy] = useState(false)
+  useEscape(onClose)
 
   const reload = useCallback(async () => {
     const r = await api(`/api/v1/tenant/${slug}/email/templates`)
@@ -2025,6 +2243,7 @@ function TemplateEditorModal({ slug, kind, initial, onSaved, onClose }: {
   const [body, setBody]   = useState(initial?.body || '')
   const [busy, setBusy]   = useState(false)
   const [err, setErr]     = useState('')
+  useEscape(onClose)
   const bodyRef = React.useRef<RichTextEditorHandle>(null)
   const subjectRef = React.useRef<HTMLInputElement>(null)
 
@@ -2054,26 +2273,28 @@ function TemplateEditorModal({ slug, kind, initial, onSaved, onClose }: {
 
   return (
     <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div data-tp="wizard-modal" style={{ ...s.modal, width: 680 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div data-tp="wizard-modal" style={{ ...s.modal, width: 680, padding: 0, gap: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 28px 14px', borderBottom: `1px solid ${C.border}` }}>
           <h3 style={s.modalTitle}>{initial ? 'Editar plantilla' : `Nueva plantilla ${KIND_LABEL[kind]}`}</h3>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: C.muted, lineHeight: 1 }}>✕</button>
         </div>
-        <label style={s.label}>Nombre interno<input style={s.input} value={name} onChange={e => setName(e.target.value)} placeholder="p. ej. Bienvenida Equipo de Adoración" /></label>
-        <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <label style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>Asunto</label>
-            <VariablePicker onInsert={insertSubject} anchorRight />
+        <div style={{ flex: 1, overflowY: 'auto', padding: '14px 28px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <label style={s.label}>Nombre interno<input style={s.input} value={name} onChange={e => setName(e.target.value)} placeholder="p. ej. Bienvenida Equipo de Adoración" /></label>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>Asunto</label>
+              <VariablePicker onInsert={insertSubject} anchorRight />
+            </div>
+            <input ref={subjectRef} style={s.input} value={subject} onChange={e => setSubject(e.target.value)} />
           </div>
-          <input ref={subjectRef} style={s.input} value={subject} onChange={e => setSubject(e.target.value)} />
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: C.muted, display: 'block', marginBottom: 4 }}>Cuerpo</label>
+            <RichTextEditor ref={bodyRef} value={body} onChange={setBody} minHeight={260}
+              extraToolbar={<VariablePicker onInsert={insertBody} anchorRight />} />
+          </div>
+          {err && <p style={s.errorText}>{err}</p>}
         </div>
-        <div>
-          <label style={{ fontSize: 12, fontWeight: 600, color: C.muted, display: 'block', marginBottom: 4 }}>Cuerpo</label>
-          <RichTextEditor ref={bodyRef} value={body} onChange={setBody} minHeight={260}
-            extraToolbar={<VariablePicker onInsert={insertBody} anchorRight />} />
-        </div>
-        {err && <p style={s.errorText}>{err}</p>}
-        <div style={s.modalActions}>
+        <div style={{ ...s.modalActions, padding: '14px 28px 18px', borderTop: `1px solid ${C.border}`, marginTop: 0 }}>
           <button style={s.btnGhost} onClick={onClose}>Cancelar</button>
           <button style={s.btnPrimary} onClick={save} disabled={busy}>{busy ? '…' : initial ? 'Guardar' : 'Crear'}</button>
         </div>
@@ -2694,7 +2915,7 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
               <div><strong style={{ color: C.text }}>Fecha:</strong> {fmtDate(openMsg.created_at)} · <strong style={{ color: C.text }}>Estado:</strong> {openMsg.status}</div>
               {openMsg.error && <div style={{ color: C.danger }}>Error: {openMsg.error}</div>}
             </div>
-            <div style={{ margin: 0, fontFamily: 'inherit', fontSize: 13, color: C.text, lineHeight: 1.6, background: C.bg, padding: '14px 16px', borderRadius: 8, maxHeight: '50vh', overflow: 'auto' }}
+            <div className="worsyn-rich-render" style={{ margin: 0, fontFamily: 'inherit', fontSize: 13, color: C.text, lineHeight: 1.6, background: '#fff', border: `1px solid ${C.border}`, padding: '14px 16px', borderRadius: 8, maxHeight: '50vh', overflow: 'auto' }}
               dangerouslySetInnerHTML={{ __html: openMsg.body }} />
             <div style={s.modalActions}>
               <button style={s.btnPrimary} onClick={() => setOpenMsg(null)}>Cerrar</button>
