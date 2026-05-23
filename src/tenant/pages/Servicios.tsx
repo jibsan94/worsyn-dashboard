@@ -1975,11 +1975,12 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
 // ─────────────────────────────────────────────────────────────────────────────
 // PersonasView — full People / Teams management
 // ─────────────────────────────────────────────────────────────────────────────
-function PersonasView({ slug, teams, setTeams, types }: {
+function PersonasView({ slug, teams, setTeams, types, resetSignal }: {
   slug: string
   teams: Team[]
   setTeams: React.Dispatch<React.SetStateAction<Team[]>>
   types: ServiceType[]
+  resetSignal?: number
 }) {
   const [tab, setTab] = useState<'personas' | 'equipos'>('personas')
   const [editingTeam, setEditingTeam] = useState<Team | null | undefined>(undefined)
@@ -2003,6 +2004,14 @@ function PersonasView({ slug, teams, setTeams, types }: {
   }, [slug])
 
   useEffect(() => { reloadPeople() }, [reloadPeople])
+
+  // Top sub-tab click resets internal detail/selection state so clicking
+  // "Personas" while viewing a person returns to the list (same for future
+  // team-detail when implemented). Skips initial mount (resetSignal undefined).
+  useEffect(() => {
+    if (resetSignal === undefined) return
+    setSelectedPersonId(null)
+  }, [resetSignal])
 
   const existingMemberIds = useMemo(() => new Set(people.map(p => p.member_id)), [people])
 
@@ -2281,7 +2290,7 @@ function PlaceholderView({ title, subtitle }: { title: string; subtitle: string 
 // ─────────────────────────────────────────────────────────────────────────────
 // Entry
 // ─────────────────────────────────────────────────────────────────────────────
-export default function Servicios({ tab }: { tab: ServiciosTab }) {
+export default function Servicios({ tab, resetSignal }: { tab: ServiciosTab; resetSignal?: number }) {
   const { slug } = useParams<{ slug: string }>()
   const [types, setTypes] = useState<ServiceType[]>([])
   const [teams, setTeams] = useState<Team[]>([])
@@ -2303,7 +2312,7 @@ export default function Servicios({ tab }: { tab: ServiciosTab }) {
   useEffect(() => { refresh() }, [refresh])
 
   if (tab === 'personas') {
-    return <PersonasView slug={slug!} teams={teams} setTeams={setTeams} types={types} />
+    return <PersonasView slug={slug!} teams={teams} setTeams={setTeams} types={types} resetSignal={resetSignal} />
   }
 
   if (tab !== 'servicios') {

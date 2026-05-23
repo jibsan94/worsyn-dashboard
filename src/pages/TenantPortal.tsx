@@ -309,7 +309,13 @@ export default function TenantPortal() {
   const serviciosTab: ServiciosTab = (SERVICIOS_TABS.includes(urlTab as ServiciosTab) ? urlTab : 'servicios') as ServiciosTab
   const settingsTabFromUrl: SettingsTab = (SETTINGS_TABS.includes(urlTab as SettingsTab) ? urlTab : 'general') as SettingsTab
   const setMiembrosTab = (t: MiembrosTab) => navigate(`/portal/${slug}/miembros/${t}`)
-  const setServiciosTab = (t: ServiciosTab) => navigate(`/portal/${slug}/servicios/${t}`)
+  // Counter bumps on every Servicios sub-tab click so child views can reset
+  // their internal detail/selection state and land on the section's list view.
+  const [serviciosNavSignal, setServiciosNavSignal] = useState(0)
+  const setServiciosTab = (t: ServiciosTab) => {
+    setServiciosNavSignal(n => n + 1)
+    navigate(`/portal/${slug}/servicios/${t}`)
+  }
   const setSettingsTabUrl = (t: SettingsTab) => navigate(`/portal/${slug}/configuracion/${t}`)
   const [miembrosView, setMiembrosView] = useState<MiembrosView>('todas')
   const [search, setSearch]             = useState('')
@@ -1352,7 +1358,7 @@ export default function TenantPortal() {
         )}
 
         {/* ── Servicios (módulo independiente en src/tenant/pages/Servicios.tsx) ── */}
-        {module === 'servicios' && <Servicios tab={serviciosTab} />}
+        {module === 'servicios' && <Servicios tab={serviciosTab} resetSignal={serviciosNavSignal} />}
 
         {/* ── Other modules ─────────────────────────────────────────────────── */}
         {module !== 'miembros' && module !== 'servicios' && module !== 'configuracion' && module !== 'perfil' && (
