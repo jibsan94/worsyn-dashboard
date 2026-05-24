@@ -2358,6 +2358,17 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
     } finally { setMsgsLoading(false) }
   }, [slug, person.id])
   useEffect(() => { reloadMsgs() }, [reloadMsgs])
+  async function deleteMsg(m: EmailMessage) {
+    if (!confirm('¿Eliminar este mensaje de Worsyn?\n(Solo se elimina de aquí — no toca la bandeja del destinatario.)')) return
+    const r = await api(`/api/v1/tenant/${slug}/email/messages/${m.id}`, { method: 'DELETE' })
+    if (r.ok) {
+      setMsgs(prev => prev.filter(x => x.id !== m.id))
+      if (openMsg?.id === m.id) setOpenMsg(null)
+    } else {
+      const j = await r.json().catch(() => ({}))
+      alert(j.detail || 'Error al eliminar')
+    }
+  }
   const [editingBlockout, setEditingBlockout] = useState<Blockout | null>(null)
 
   const reload = useCallback(async () => {
@@ -2713,24 +2724,34 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
                   return (
                     <div>
                       {filtered.map(m => (
-                        <button key={m.id} onClick={() => setOpenMsg(m)}
-                          style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 14px', background: 'none', border: 'none', borderBottom: `1px solid ${C.soft}`, cursor: 'pointer' }}
-                          onMouseEnter={e => e.currentTarget.style.background = C.soft}
-                          onMouseLeave={e => e.currentTarget.style.background = 'none'}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
-                            <span style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {m.subject || <em style={{ color: C.muted, fontWeight: 400 }}>(sin asunto)</em>}
-                            </span>
-                            <span style={{ fontSize: 11, color: C.muted, flexShrink: 0 }}>{fmtDate(m.created_at)}</span>
-                          </div>
-                          <div style={{ fontSize: 11, color: C.muted, marginTop: 2, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                            <span>{msgsTab === 'sent' ? 'Para' : 'De'}: {m.counterparty_name || (msgsTab === 'sent' ? m.recipient_email : m.sender_email || '—')}</span>
-                            {m.status === 'queued'    && <span style={{ ...s.pill, background: C.soft,         color: C.muted,   fontSize: 10, padding: '1px 6px' }}>En cola</span>}
-                            {m.status === 'sent'      && <span style={{ ...s.pill, background: C.successLight, color: C.success, fontSize: 10, padding: '1px 6px' }}>Enviado</span>}
-                            {m.status === 'failed'    && <span style={{ ...s.pill, background: C.dangerLight,  color: C.danger,  fontSize: 10, padding: '1px 6px' }}>Fallido</span>}
-                            {m.status === 'delivered' && <span style={{ ...s.pill, background: C.successLight, color: C.success, fontSize: 10, padding: '1px 6px' }}>Entregado</span>}
-                          </div>
-                        </button>
+                        <div key={m.id} style={{ position: 'relative', borderBottom: `1px solid ${C.soft}` }}>
+                          <button onClick={() => setOpenMsg(m)}
+                            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 44px 10px 14px', background: 'none', border: 'none', cursor: 'pointer' }}
+                            onMouseEnter={e => e.currentTarget.style.background = C.soft}
+                            onMouseLeave={e => e.currentTarget.style.background = 'none'}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+                              <span style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {m.subject || <em style={{ color: C.muted, fontWeight: 400 }}>(sin asunto)</em>}
+                              </span>
+                              <span style={{ fontSize: 11, color: C.muted, flexShrink: 0 }}>{fmtDate(m.created_at)}</span>
+                            </div>
+                            <div style={{ fontSize: 11, color: C.muted, marginTop: 2, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                              <span>{msgsTab === 'sent' ? 'Para' : 'De'}: {m.counterparty_name || (msgsTab === 'sent' ? m.recipient_email : m.sender_email || '—')}</span>
+                              {m.status === 'queued'    && <span style={{ ...s.pill, background: C.soft,         color: C.muted,   fontSize: 10, padding: '1px 6px' }}>En cola</span>}
+                              {m.status === 'sent'      && <span style={{ ...s.pill, background: C.successLight, color: C.success, fontSize: 10, padding: '1px 6px' }}>Enviado</span>}
+                              {m.status === 'failed'    && <span style={{ ...s.pill, background: C.dangerLight,  color: C.danger,  fontSize: 10, padding: '1px 6px' }}>Fallido</span>}
+                              {m.status === 'received'  && <span style={{ ...s.pill, background: C.primaryLight, color: C.primary, fontSize: 10, padding: '1px 6px' }}>Recibido</span>}
+                              {m.status === 'delivered' && <span style={{ ...s.pill, background: C.successLight, color: C.success, fontSize: 10, padding: '1px 6px' }}>Entregado</span>}
+                            </div>
+                          </button>
+                          <button onClick={e => { e.stopPropagation(); deleteMsg(m) }}
+                            title="Eliminar este mensaje de Worsyn"
+                            style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: C.muted, padding: 6, borderRadius: 6, fontSize: 14, lineHeight: 1 }}
+                            onMouseEnter={e => { e.currentTarget.style.background = C.dangerLight; e.currentTarget.style.color = C.danger }}
+                            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = C.muted }}>
+                            🗑
+                          </button>
+                        </div>
                       ))}
                     </div>
                   )
@@ -2933,6 +2954,7 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
             <div className="worsyn-rich-render" style={{ margin: 0, fontFamily: 'inherit', fontSize: 13, color: C.text, lineHeight: 1.6, background: '#fff', border: `1px solid ${C.border}`, padding: '14px 16px', borderRadius: 8, maxHeight: '50vh', overflow: 'auto' }}
               dangerouslySetInnerHTML={{ __html: openMsg.body }} />
             <div style={s.modalActions}>
+              <button style={{ ...s.btnGhost, color: C.danger, borderColor: 'rgba(239,68,68,.3)' }} onClick={() => deleteMsg(openMsg)}>Eliminar</button>
               <button style={s.btnPrimary} onClick={() => setOpenMsg(null)}>Cerrar</button>
             </div>
           </div>

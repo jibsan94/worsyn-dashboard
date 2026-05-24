@@ -3,6 +3,7 @@ import Layout from './components/Layout/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
 import RoleRoute from './components/RoleRoute'
 import LoginPage from './pages/Login'
+import SetPasswordPage from './pages/SetPassword'
 import DashboardPage from './pages/Dashboard'
 import OrganizationsPage from './pages/Organizations'
 import OrganizationDetailPage from './pages/OrganizationDetail'
@@ -30,6 +31,7 @@ export default function App() {
       <Routes>
         {/* Public */}
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/set-password/:token" element={<SetPasswordPage />} />
         <Route path="/portal" element={<TenantLoginPage />} />
         <Route path="/portal/:slug" element={<TenantPortalPage />} />
         <Route path="/portal/:slug/:module" element={<TenantPortalPage />} />
