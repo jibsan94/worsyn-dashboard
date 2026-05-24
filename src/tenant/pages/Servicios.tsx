@@ -2723,10 +2723,12 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
                             </span>
                             <span style={{ fontSize: 11, color: C.muted, flexShrink: 0 }}>{fmtDate(m.created_at)}</span>
                           </div>
-                          <div style={{ fontSize: 11, color: C.muted, marginTop: 2, display: 'flex', gap: 6 }}>
+                          <div style={{ fontSize: 11, color: C.muted, marginTop: 2, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                             <span>{msgsTab === 'sent' ? 'Para' : 'De'}: {m.counterparty_name || (msgsTab === 'sent' ? m.recipient_email : m.sender_email || '—')}</span>
-                            {m.status === 'queued' && <span style={{ ...s.pill, background: C.soft, color: C.muted, fontSize: 10, padding: '1px 6px' }}>En cola</span>}
-                            {m.status === 'failed' && <span style={{ ...s.pill, background: C.dangerLight, color: C.danger, fontSize: 10, padding: '1px 6px' }}>Fallido</span>}
+                            {m.status === 'queued'    && <span style={{ ...s.pill, background: C.soft,         color: C.muted,   fontSize: 10, padding: '1px 6px' }}>En cola</span>}
+                            {m.status === 'sent'      && <span style={{ ...s.pill, background: C.successLight, color: C.success, fontSize: 10, padding: '1px 6px' }}>Enviado</span>}
+                            {m.status === 'failed'    && <span style={{ ...s.pill, background: C.dangerLight,  color: C.danger,  fontSize: 10, padding: '1px 6px' }}>Fallido</span>}
+                            {m.status === 'delivered' && <span style={{ ...s.pill, background: C.successLight, color: C.success, fontSize: 10, padding: '1px 6px' }}>Entregado</span>}
                           </div>
                         </button>
                       ))}
@@ -2900,7 +2902,12 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
       )}
       {composeOpen && (
         <ComposeEmailModal slug={slug} defaultRecipient={person}
-          onSent={sent => { setMsgs(prev => [...sent, ...prev]); setComposeOpen(false); setMsgsTab('sent') }}
+          onSent={sent => {
+            setMsgs(prev => [...sent, ...prev]); setComposeOpen(false); setMsgsTab('sent')
+            // SMTP dispatch is async (BackgroundTask). Poll twice to catch queued→sent/failed.
+            setTimeout(() => reloadMsgs(), 2500)
+            setTimeout(() => reloadMsgs(), 8000)
+          }}
           onClose={() => setComposeOpen(false)} />
       )}
       {openMsg && (
@@ -2912,9 +2919,17 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
             </div>
             <div style={{ fontSize: 12, color: C.muted, display: 'flex', flexDirection: 'column', gap: 3 }}>
               <div><strong style={{ color: C.text }}>{openMsg.direction === 'sent' ? 'Para' : 'De'}:</strong> {openMsg.counterparty_name || ''} &lt;{openMsg.direction === 'sent' ? openMsg.recipient_email : (openMsg.sender_email || '')}&gt;</div>
-              <div><strong style={{ color: C.text }}>Fecha:</strong> {fmtDate(openMsg.created_at)} · <strong style={{ color: C.text }}>Estado:</strong> {openMsg.status}</div>
-              {openMsg.error && <div style={{ color: C.danger }}>Error: {openMsg.error}</div>}
+              <div><strong style={{ color: C.text }}>Fecha:</strong> {fmtDate(openMsg.created_at)} · <strong style={{ color: C.text }}>Estado:</strong> {openMsg.status}{openMsg.sent_at ? ` · Enviado: ${fmtDate(openMsg.sent_at)}` : ''}</div>
             </div>
+            {openMsg.error && (
+              <div style={{ background: C.dangerLight, border: `1px solid ${C.danger}`, color: '#7F1D1D', borderRadius: 8, padding: '10px 12px', fontSize: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>El envío SMTP falló</div>
+                <code style={{ fontFamily: 'monospace', fontSize: 11, color: C.danger }}>{openMsg.error}</code>
+                <div style={{ marginTop: 6, fontSize: 11, color: C.muted }}>
+                  Revisa la configuración en <strong>Panel admin → Configuración → Correo SMTP</strong> o pide al admin que mire los logs del servidor.
+                </div>
+              </div>
+            )}
             <div className="worsyn-rich-render" style={{ margin: 0, fontFamily: 'inherit', fontSize: 13, color: C.text, lineHeight: 1.6, background: '#fff', border: `1px solid ${C.border}`, padding: '14px 16px', borderRadius: 8, maxHeight: '50vh', overflow: 'auto' }}
               dangerouslySetInnerHTML={{ __html: openMsg.body }} />
             <div style={s.modalActions}>
