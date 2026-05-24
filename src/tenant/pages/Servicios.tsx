@@ -2358,6 +2358,24 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
     } finally { setMsgsLoading(false) }
   }, [slug, person.id])
   useEffect(() => { reloadMsgs() }, [reloadMsgs])
+  // Password reset — sends a 10-min magic link via SMTP
+  const [sendingReset, setSendingReset] = useState(false)
+  async function sendPasswordReset() {
+    if (!confirm(`¿Enviar email de restablecimiento de contraseña a ${person.full_name || person.email}?\n\nEl enlace caduca en 10 minutos.`)) return
+    setSendingReset(true)
+    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/password-reset`, { method: 'POST' })
+    setSendingReset(false)
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}))
+      alert(j.detail || 'Error al enviar')
+      return
+    }
+    const j = await r.json()
+    alert(`Email enviado a ${j.email}\n\nEl enlace caduca en ${j.expires_minutes} minutos.`)
+    reloadMsgs()  // surface the sent row immediately
+    setTimeout(() => reloadMsgs(), 2500)
+    setTimeout(() => reloadMsgs(), 8000)
+  }
   async function deleteMsg(m: EmailMessage) {
     if (!confirm('¿Eliminar este mensaje de Worsyn?\n(Solo se elimina de aquí — no toca la bandeja del destinatario.)')) return
     const r = await api(`/api/v1/tenant/${slug}/email/messages/${m.id}`, { method: 'DELETE' })
@@ -2384,6 +2402,46 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
     if (!confirm('¿Eliminar este bloqueo?')) return
     const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/blockouts/${b.id}`, { method: 'DELETE' })
     if (r.ok) setBlockouts(prev => prev.filter(x => x.id !== b.id))
+  }
+
+  // ── Scheduling summary (assignments) ──────────────────────────────────────
+  type RangePreset = 'upcoming' | '1m' | '3m' | '6m' | '12m' | 'custom'
+  const [rangePreset, setRangePreset] = useState<RangePreset>('upcoming')
+  const [customFrom, setCustomFrom] = useState('')
+  const [customTo, setCustomTo] = useState('')
+  const [summary, setSummary] = useState({ confirmed: 0, pending: 0, declined: 0, total: 0 })
+  const [assignments, setAssignments] = useState<any[]>([])
+  const [loadingA, setLoadingA] = useState(true)
+  function resolveRange(p: RangePreset): { from: string | null; to: string | null } {
+    const today = new Date()
+    const iso = (d: Date) => d.toISOString().slice(0, 10)
+    if (p === 'upcoming') return { from: iso(today), to: null }
+    if (p === 'custom')   return { from: customFrom || null, to: customTo || null }
+    const months = p === '1m' ? 1 : p === '3m' ? 3 : p === '6m' ? 6 : 12
+    const past = new Date(today); past.setMonth(past.getMonth() - months)
+    return { from: iso(past), to: iso(today) }
+  }
+  const reloadAssignments = useCallback(async () => {
+    setLoadingA(true)
+    try {
+      const { from, to } = resolveRange(rangePreset)
+      const qs = new URLSearchParams()
+      if (from) qs.set('range_from', from)
+      if (to)   qs.set('range_to',   to)
+      const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/assignments?${qs}`)
+      if (r.ok) {
+        const j = await r.json()
+        setSummary(j.summary || { confirmed: 0, pending: 0, declined: 0, total: 0 })
+        setAssignments(j.items || [])
+      }
+    } finally { setLoadingA(false) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug, person.id, rangePreset, customFrom, customTo])
+  useEffect(() => { reloadAssignments() }, [reloadAssignments])
+
+  const RANGE_LABELS: Record<RangePreset, string> = {
+    upcoming: 'Próximos', '1m': 'Último mes', '3m': 'Últimos 3 meses',
+    '6m': 'Últimos 6 meses', '12m': 'Últimos 12 meses', custom: 'Personalizado',
   }
 
   // ── Person Teams ──────────────────────────────────────────────────────────
@@ -2514,13 +2572,138 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
       {/* Tab content */}
       <div data-tp="detail-grid" style={{ padding: '20px 0', display: 'grid', gridTemplateColumns: tab === 'details' ? '1fr 1fr 1fr' : '1.2fr 1fr', gap: 22, flex: 1 }}>
         {tab === 'scheduling' && <>
-          {/* Left: Schedule (blockouts) */}
-          <div>
-            <SectionTitle hint="Bloqueos y disponibilidad de la persona" right={
-              <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={() => { setEditingBlockout(null); setBlockoutOpen(true) }}>
-                + Añadir bloqueo
-              </button>
-            }>Calendario</SectionTitle>
+          {/* Left: Resumen de programación + Calendario (blockouts) */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <div>
+              <SectionTitle hint="Resumen de las veces que la persona ha sido solicitada a un plan, agrupado por estado.">
+                Resumen de programación
+              </SectionTitle>
+              <Card padded={false}>
+                {/* Range selector */}
+                <div style={{ padding: '12px 16px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <select value={rangePreset} onChange={e => setRangePreset(e.target.value as any)}
+                    style={{ ...s.select, padding: '6px 10px', fontSize: 13, width: 'auto' }}>
+                    {(['upcoming', '1m', '3m', '6m', '12m', 'custom'] as RangePreset[]).map(p => (
+                      <option key={p} value={p}>{RANGE_LABELS[p]}</option>
+                    ))}
+                  </select>
+                  {rangePreset === 'custom' && (
+                    <>
+                      <input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)}
+                        style={{ ...s.input, padding: '5px 9px', fontSize: 12, width: 140 }} />
+                      <span style={{ fontSize: 12, color: C.muted }}>–</span>
+                      <input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)}
+                        style={{ ...s.input, padding: '5px 9px', fontSize: 12, width: 140 }} />
+                    </>
+                  )}
+                </div>
+
+                {/* Donut + counts */}
+                {loadingA ? (
+                  <div style={{ padding: 32, textAlign: 'center', color: C.muted, fontSize: 13 }}>Cargando…</div>
+                ) : (
+                  <div style={{ padding: '22px 16px', display: 'grid', gridTemplateColumns: '180px 1fr', gap: 22, alignItems: 'center' }}>
+                    {/* SVG donut */}
+                    {(() => {
+                      const total = Math.max(1, summary.total)
+                      const segs = [
+                        { label: 'CONFIRMADOS',   v: summary.confirmed, c: C.success },
+                        { label: 'SIN RESPONDER', v: summary.pending,   c: C.warning  },
+                        { label: 'RECHAZADOS',    v: summary.declined,  c: C.danger  },
+                      ]
+                      const R = 60, CX = 80, CY = 80, STROKE = 18, CIRC = 2 * Math.PI * R
+                      let acc = 0
+                      return (
+                        <div style={{ position: 'relative', width: 160, height: 160 }}>
+                          <svg viewBox="0 0 160 160" width={160} height={160} style={{ transform: 'rotate(-90deg)' }}>
+                            <circle cx={CX} cy={CY} r={R} fill="none" stroke="#F1F5F9" strokeWidth={STROKE} />
+                            {summary.total > 0 && segs.filter(x => x.v > 0).map((seg, i) => {
+                              const len = (seg.v / total) * CIRC
+                              const dash = `${len} ${CIRC - len}`
+                              const offset = -acc
+                              acc += len
+                              return (
+                                <circle key={i} cx={CX} cy={CY} r={R} fill="none"
+                                  stroke={seg.c} strokeWidth={STROKE} strokeLinecap="butt"
+                                  strokeDasharray={dash} strokeDashoffset={offset} />
+                              )
+                            })}
+                          </svg>
+                          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                            <span style={{ fontSize: 22, fontWeight: 700, color: C.text }}>{summary.total}</span>
+                            <span style={{ fontSize: 10, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Total</span>
+                          </div>
+                        </div>
+                      )
+                    })()}
+                    {/* Counts column */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {[
+                        { label: 'Confirmados',   v: summary.confirmed, c: C.success  },
+                        { label: 'Sin responder', v: summary.pending,   c: C.warning },
+                        { label: 'Rechazados',    v: summary.declined,  c: C.danger   },
+                      ].map((row, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span style={{ width: 10, height: 10, borderRadius: 999, background: row.c, flexShrink: 0 }} />
+                          <span style={{ flex: 1, fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.07em' }}>{row.label}</span>
+                          <span style={{ fontSize: 17, fontWeight: 700, color: row.c, minWidth: 24, textAlign: 'right' }}>{row.v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Upcoming plans table */}
+                {assignments.length > 0 && (
+                  <>
+                    <div style={{ padding: '10px 16px', borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`, background: C.bg }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Planes en el rango</span>
+                    </div>
+                    <table style={s.planTable}>
+                      <tbody>
+                        {assignments.map(a => {
+                          const statusIcon = a.status === 'confirmed' ? '✓' : a.status === 'declined' ? '✕' : '?'
+                          const statusColor = a.status === 'confirmed' ? C.success : a.status === 'declined' ? C.danger : C.warning
+                          return (
+                            <tr key={a.id}>
+                              <td style={{ ...s.planTd, width: 36, textAlign: 'center' }}>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 999, border: `2px solid ${statusColor}`, color: statusColor, fontSize: 12, fontWeight: 700 }}>{statusIcon}</span>
+                              </td>
+                              <td style={{ ...s.planTd, color: C.muted, fontSize: 12, whiteSpace: 'nowrap' }}>
+                                {a.scheduled_at ? fmtDate(a.scheduled_at) : '—'}
+                              </td>
+                              <td style={s.planTd}>
+                                <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{a.plan_title || a.service_type_name || '—'}</div>
+                                {(a.position || a.team_name) && (
+                                  <div style={{ fontSize: 11, color: C.muted, marginTop: 2, display: 'flex', alignItems: 'center', gap: 5 }}>
+                                    {a.team_color && <span style={{ width: 7, height: 7, borderRadius: 2, background: a.team_color, flexShrink: 0 }} />}
+                                    {a.position}{a.position && a.team_name ? ' · ' : ''}{a.team_name}
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </>
+                )}
+
+                {/* Empty state */}
+                {!loadingA && assignments.length === 0 && (
+                  <div style={{ padding: '24px 16px 28px', textAlign: 'center', color: C.muted, fontSize: 13, borderTop: `1px solid ${C.soft}` }}>
+                    No hay planes en este rango. Responder a solicitudes ayuda al líder de equipo a cuadrar los servicios.
+                  </div>
+                )}
+              </Card>
+            </div>
+
+            <div>
+              <SectionTitle hint="Bloqueos y disponibilidad de la persona" right={
+                <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={() => { setEditingBlockout(null); setBlockoutOpen(true) }}>
+                  + Añadir bloqueo
+                </button>
+              }>Calendario</SectionTitle>
             <Card padded={false}>
               <div style={{ padding: '10px 16px', borderBottom: `1px solid ${C.border}` }}>
                 <span style={{ fontSize: 12, fontWeight: 600, color: C.text }}>Próximos bloqueos</span>
@@ -2569,6 +2752,7 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
                   )
               }
             </Card>
+            </div>
           </div>
 
           {/* Right: Preferences + Teams */}
@@ -2759,10 +2943,14 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
               </Card>
             </div>
             <div>
-              <SectionTitle hint="Reset de contraseña por email">Contraseña</SectionTitle>
+              <SectionTitle hint="Envía un enlace de restablecimiento por email (caduca en 10 minutos)">Contraseña</SectionTitle>
               <Card>
-                <button style={s.btnGhost} disabled>Enviar email de restablecimiento</button>
-                <p style={{ fontSize: 11, color: C.muted, margin: '8px 0 0', fontStyle: 'italic' }}>* Pendiente de conectar SMTP.</p>
+                <button style={s.btnPrimary} onClick={sendPasswordReset} disabled={sendingReset}>
+                  {sendingReset ? 'Enviando…' : 'Enviar email de restablecimiento'}
+                </button>
+                <p style={{ fontSize: 11, color: C.muted, margin: '8px 0 0', lineHeight: 1.55 }}>
+                  La persona recibirá un correo con un enlace para elegir una nueva contraseña. <strong>Caduca en 10 minutos</strong> — si lo necesita después, reenvíalo desde aquí.
+                </p>
               </Card>
             </div>
           </div>
