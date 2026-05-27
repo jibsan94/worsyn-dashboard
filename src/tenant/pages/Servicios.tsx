@@ -851,7 +851,10 @@ function TeamFormModal({ slug, initial, orgMembers, types, currentMemberId, onSa
   const leaderCandidates = useMemo(() => {
     const q = leaderQuery.trim().toLowerCase()
     const taken = new Set(leaderIds)
-    return orgMembers.filter(m => !taken.has(m.id) && (!q || (m.full_name || '').toLowerCase().includes(q) || m.email.toLowerCase().includes(q))).slice(0, 8)
+    return orgMembers
+      .filter(m => !taken.has(m.id) && (!q || (m.full_name || '').toLowerCase().includes(q) || m.email.toLowerCase().includes(q)))
+      .sort((a, b) => (a.full_name || a.email).toLowerCase().localeCompare((b.full_name || b.email).toLowerCase(), 'es'))
+      .slice(0, 8)
   }, [orgMembers, leaderIds, leaderQuery])
 
   function toggleType(id: string) {
@@ -1075,6 +1078,7 @@ interface ServicePerson {
   type_permissions: TypePerm[]
   welcomed_at: string | null
   password_set: boolean
+  is_active?: boolean
   scheduling?: { max_per_month: number | null; max_per_day: number | null }
   signature?: { text: string | null; image: string | null }
   preferred_notif_app?: 'servicios' | 'worsyn'
@@ -1082,7 +1086,7 @@ interface ServicePerson {
   debug_password?: string | null   // TEST-ONLY — remove before prod
 }
 
-type EmailKind = 'general' | 'schedule' | 'signup' | 'welcome'
+type EmailKind = 'general' | 'schedule' | 'signup' | 'welcome' | 'team_welcome'
 interface EmailTemplate {
   id: string; kind: EmailKind; name: string; subject: string; body: string;
   is_default: boolean; created_at: string; updated_at: string | null
@@ -1098,13 +1102,15 @@ interface EmailMessage {
 }
 
 const KIND_LABEL: Record<EmailKind, string> = {
-  general: 'General', schedule: 'Programación', signup: 'Hojas de inscripción', welcome: 'Bienvenida',
+  general: 'General', schedule: 'Programación', signup: 'Hojas de inscripción',
+  welcome: 'Bienvenida', team_welcome: 'Bienvenida a equipo',
 }
 const KIND_HINT: Record<EmailKind, string> = {
   general: 'Mensajes generales (no asociados a un plan o fecha).',
   schedule: 'Asociados a planes o al cuadrante. Llevan botones de Aceptar / Rechazar.',
   signup: 'Para hojas de inscripción y reclutamiento.',
   welcome: 'Bienvenida al portal — se envía al añadir una persona nueva.',
+  team_welcome: 'Bienvenida a un equipo — se envía cuando un miembro existente entra a un equipo nuevo.',
 }
 
 // Common variables exposed by the picker. Full catalog → artifacts/EMAIL-VARIABLES.md
@@ -2196,10 +2202,11 @@ const RichTextEditor = React.forwardRef<RichTextEditorHandle, {
   )
 })
 
-function ComposeEmailModal({ slug, defaultRecipient, autoApplyKind, onClose, onSent }: {
+function ComposeEmailModal({ slug, defaultRecipient, autoApplyKind, contextTeamId, onClose, onSent }: {
   slug: string
   defaultRecipient: ServicePerson
   autoApplyKind?: EmailKind
+  contextTeamId?: string
   onClose: () => void
   onSent: (sent: EmailMessage[]) => void
 }) {
@@ -2250,7 +2257,7 @@ function ComposeEmailModal({ slug, defaultRecipient, autoApplyKind, onClose, onS
     setErr('')
     const r = await api(`/api/v1/tenant/${slug}/email/messages/preview`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipient_member_id: defaultRecipient.member_id, subject, body }),
+      body: JSON.stringify({ recipient_member_id: defaultRecipient.member_id, subject, body, team_id: contextTeamId || null }),
     })
     if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); return }
     setPreview(await r.json())
@@ -2263,6 +2270,7 @@ function ComposeEmailModal({ slug, defaultRecipient, autoApplyKind, onClose, onS
       body: JSON.stringify({
         recipient_member_ids: [defaultRecipient.member_id],
         template_id: tplId || null, subject, body,
+        team_id: contextTeamId || null,
       }),
     })
     if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); setBusy(false); return }
@@ -2520,6 +2528,44 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
   onChanged: (p: ServicePerson) => void
 }) {
   const [tab, setTab] = useState<'scheduling' | 'communication' | 'details'>('scheduling')
+  const [rolePickerOpen, setRolePickerOpen] = useState(false)
+  const [actionsOpen, setActionsOpen] = useState(false)
+  const [showModulePermsStub, setShowModulePermsStub] = useState(false)
+  const [headerBusy, setHeaderBusy] = useState(false)
+
+  async function changeServiceRole(newRole: ServiceRole) {
+    setHeaderBusy(true)
+    try {
+      const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ service_role: newRole }),
+      })
+      if (r.ok) onChanged(await r.json() as ServicePerson)
+    } finally { setHeaderBusy(false); setRolePickerOpen(false) }
+  }
+
+  async function toggleActive() {
+    const next = !(person.is_active !== false)
+    const verb = next ? 'habilitar' : 'deshabilitar'
+    if (!confirm(`¿Seguro que quieres ${verb} a ${person.full_name || person.email}?`)) return
+    setHeaderBusy(true)
+    try {
+      const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: next }),
+      })
+      if (r.ok) onChanged(await r.json() as ServicePerson)
+      else { const j = await r.json().catch(() => ({} as any)); alert(j.detail || 'Error') }
+    } finally { setHeaderBusy(false); setActionsOpen(false) }
+  }
+
+  async function deletePerson() {
+    if (!confirm(`¿Eliminar a ${person.full_name || person.email}? Esta acción es irreversible.`)) return
+    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}`, { method: 'DELETE' })
+    if (r.ok) onBack()
+    else { const j = await r.json().catch(() => ({} as any)); alert(j.detail || 'Error') }
+  }
+
   const [blockouts, setBlockouts] = useState<Blockout[]>([])
   const [loadingB, setLoadingB] = useState(true)
   const [blockoutOpen, setBlockoutOpen] = useState(false)
@@ -2533,7 +2579,10 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
   const [loadingPT, setLoadingPT] = useState(true)
   const [teamPickerOpen, setTeamPickerOpen] = useState(false)
   const [pickedTeamId, setPickedTeamId] = useState<string>('')
-  const [pickedTeamRole, setPickedTeamRole] = useState('')
+  const [pickedPositionIds, setPickedPositionIds] = useState<string[]>([])
+  const [pickedTeamPositions, setPickedTeamPositions] = useState<{ id: string; name: string }[]>([])
+  const [welcomeAfterAdd, setWelcomeAfterAdd] = useState<{ teamId: string } | null>(null)
+  const [addingTeamBusy, setAddingTeamBusy] = useState(false)
   // Signature
   const [sigEditing, setSigEditing] = useState(false)
   const [sigText, setSigText]   = useState(person.signature?.text  || '')
@@ -2665,15 +2714,56 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
     return allTeams.filter(t => !taken.has(t.id))
   }, [allTeams, personTeams])
 
-  async function addToTeam() {
+  // Load team positions when a team is picked
+  useEffect(() => {
+    setPickedPositionIds([])
+    setPickedTeamPositions([])
     if (!pickedTeamId) return
-    const r = await api(`/api/v1/tenant/${slug}/teams/${pickedTeamId}/members`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ member_id: person.member_id, role: pickedTeamRole.trim() || null }),
+    let cancel = false
+    api(`/api/v1/tenant/${slug}/teams/${pickedTeamId}/detail`).then(r => r.ok ? r.json() : null).then(d => {
+      if (cancel || !d) return
+      setPickedTeamPositions((d.positions || []).map((p: any) => ({ id: p.id, name: p.name })))
     })
-    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.detail || 'Error'); return }
-    setTeamPickerOpen(false); setPickedTeamId(''); setPickedTeamRole('')
-    reloadPersonTeams()
+    return () => { cancel = true }
+  }, [slug, pickedTeamId])
+
+  async function addToTeam() {
+    if (!pickedTeamId || addingTeamBusy) return
+    setAddingTeamBusy(true)
+    try {
+      // 1. Add to team_memberships (legacy convenience — keeps the Person→Teams list working)
+      const wasInTeam = personTeams.some(pt => pt.team_id === pickedTeamId)
+      if (!wasInTeam) {
+        const r1 = await api(`/api/v1/tenant/${slug}/teams/${pickedTeamId}/members`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ member_id: person.member_id, role: null }),
+        })
+        if (!r1.ok && r1.status !== 409) {
+          const j = await r1.json().catch(() => ({}))
+          alert(j.detail || 'Error al añadir al equipo'); return
+        }
+      }
+      // 2. Add to each picked position via the canonical position-members endpoint.
+      //    This is the same code path the team detail uses, so the auto-enroll
+      //    + newly_enrolled semantics stay consistent across both directions.
+      for (const posId of pickedPositionIds) {
+        const r2 = await api(`/api/v1/tenant/${slug}/teams/${pickedTeamId}/positions/${posId}/members`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ member_ids: [person.member_id] }),
+        })
+        if (!r2.ok && r2.status !== 409) {
+          const j = await r2.json().catch(() => ({}))
+          alert(j.detail || 'Error al asignar la posición'); return
+        }
+      }
+      // 3. Queue team_welcome compose if this is a NEW team join for this person.
+      //    (Skip when the person was already in the team — they just got more positions.)
+      if (!wasInTeam) {
+        setWelcomeAfterAdd({ teamId: pickedTeamId })
+      }
+      setTeamPickerOpen(false); setPickedTeamId(''); setPickedPositionIds([])
+      reloadPersonTeams()
+    } finally { setAddingTeamBusy(false) }
   }
   async function removeFromTeam(pt: PersonTeam) {
     if (!confirm(`¿Quitar a ${person.full_name || person.email} de ${pt.team_name}?`)) return
@@ -2748,12 +2838,127 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
             <span>{person.email}</span>
           </div>
         </div>
-        <div data-tp="detail-header-actions" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: C.text }}>
-            {SERVICE_ROLE_LABEL[person.service_role]}
-            <svg viewBox="0 0 16 16" fill={C.muted} width={12} height={12}><path d="M5 7h6l-3 4z"/></svg>
+        <div data-tp="detail-header-actions" style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}>
+          {/* Disabled badge */}
+          {person.is_active === false && (
+            <span style={{
+              background: '#FEE2E2', color: '#991B1B', border: '1px solid #FCA5A5',
+              fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 999,
+              letterSpacing: '0.04em', textTransform: 'uppercase' as const,
+            }}>Deshabilitado</span>
+          )}
+
+          {/* Service role picker */}
+          <div style={{ position: 'relative' }}>
+            <button disabled={headerBusy} onClick={() => { setRolePickerOpen(o => !o); setActionsOpen(false) }}
+              title="Modificar permisos del miembro"
+              style={{ ...s.btnGhost, padding: '6px 12px', fontSize: 13, gap: 8 }}>
+              <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+              </svg>
+              {SERVICE_ROLE_LABEL[person.service_role]}
+              <svg viewBox="0 0 16 16" fill={C.muted} width={10} height={10}><path d="M3 5h10l-5 6z"/></svg>
+            </button>
+            {rolePickerOpen && (
+              <div style={{
+                position: 'absolute', top: '100%', right: 0, marginTop: 4,
+                background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
+                boxShadow: '0 4px 16px rgba(0,0,0,.14)', zIndex: 50, minWidth: 220,
+              }}>
+                {(Object.keys(SERVICE_ROLE_LABEL) as ServiceRole[]).map(r => (
+                  <button key={r} onClick={() => changeServiceRole(r)}
+                    disabled={headerBusy}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                      textAlign: 'left' as const, padding: '8px 14px',
+                      background: r === person.service_role ? C.primaryLight : 'transparent',
+                      color: r === person.service_role ? C.primary : C.text,
+                      fontWeight: r === person.service_role ? 600 : 400,
+                      border: 'none', cursor: headerBusy ? 'wait' : 'pointer', fontSize: 13,
+                      transition: 'background 0.12s',
+                    }}
+                    onMouseEnter={e => r !== person.service_role && (e.currentTarget.style.background = C.soft)}
+                    onMouseLeave={e => r !== person.service_role && (e.currentTarget.style.background = 'transparent')}>
+                    {r === person.service_role && <span style={{ color: C.primary }}>✓</span>}
+                    {SERVICE_ROLE_LABEL[r]}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-          <button style={s.btnGhost}>Acciones ▾</button>
+
+          {/* Acciones dropdown */}
+          <div style={{ position: 'relative' }}>
+            <button disabled={headerBusy} onClick={() => { setActionsOpen(o => !o); setRolePickerOpen(false) }}
+              style={{ ...s.btnGhost, padding: '6px 12px', fontSize: 13, gap: 6 }}>
+              <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/>
+              </svg>
+              Acciones
+              <svg viewBox="0 0 16 16" fill={C.muted} width={10} height={10}><path d="M3 5h10l-5 6z"/></svg>
+            </button>
+            {actionsOpen && (
+              <div style={{
+                position: 'absolute', top: '100%', right: 0, marginTop: 4,
+                background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
+                boxShadow: '0 4px 16px rgba(0,0,0,.14)', zIndex: 50, minWidth: 250,
+              }}>
+                <button onClick={() => { setShowModulePermsStub(true); setActionsOpen(false) }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left' as const,
+                    padding: '10px 14px', background: 'none', border: 'none', cursor: 'pointer',
+                    fontSize: 13, color: C.text, transition: 'background 0.12s',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = C.soft)}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  <svg viewBox="0 0 24 24" width={15} height={15} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/>
+                  </svg>
+                  Gestionar permisos por módulo
+                </button>
+                <button onClick={toggleActive} disabled={headerBusy}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left' as const,
+                    padding: '10px 14px', background: 'none', border: 'none',
+                    cursor: headerBusy ? 'wait' : 'pointer',
+                    fontSize: 13, color: person.is_active === false ? C.success : C.warning,
+                    fontWeight: 500, transition: 'background 0.12s',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = C.soft)}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  {person.is_active === false ? (
+                    <>
+                      <svg viewBox="0 0 24 24" width={15} height={15} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M20 6 9 17l-5-5"/>
+                      </svg>
+                      Habilitar miembro
+                    </>
+                  ) : (
+                    <>
+                      <svg viewBox="0 0 24 24" width={15} height={15} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M18.36 6.64A9 9 0 0 1 20.77 15M6.64 6.64a9 9 0 1 0 12.73 12.73M12 2v10"/>
+                      </svg>
+                      Deshabilitar miembro
+                    </>
+                  )}
+                </button>
+                <div style={{ height: 1, background: C.border, margin: '4px 0' }} />
+                <button onClick={deletePerson} disabled={headerBusy}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left' as const,
+                    padding: '10px 14px', background: 'none', border: 'none', cursor: headerBusy ? 'wait' : 'pointer',
+                    fontSize: 13, color: C.danger, fontWeight: 500, transition: 'background 0.12s',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = C.dangerLight)}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  <svg viewBox="0 0 24 24" width={15} height={15} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                  </svg>
+                  Eliminar persona
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -3030,7 +3235,7 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
             <div>
               <SectionTitle hint="Equipos asignados a esta persona"
                 right={availableTeams.length > 0
-                  ? <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={() => { setTeamPickerOpen(true); setPickedTeamId(availableTeams[0]?.id || ''); setPickedTeamRole('') }}>+ Añadir</button>
+                  ? <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={() => { setTeamPickerOpen(true); setPickedTeamId(availableTeams[0]?.id || ''); setPickedPositionIds([]) }}>+ Añadir</button>
                   : <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} disabled title="Esta persona ya pertenece a todos los equipos">+ Añadir</button>}>
                 Equipos
               </SectionTitle>
@@ -3060,7 +3265,7 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
               </Card>
               {teamPickerOpen && (
                 <div style={s.overlay} onClick={e => e.target === e.currentTarget && setTeamPickerOpen(false)}>
-                  <div data-tp="modal" style={{ ...s.modal, width: 420 }}>
+                  <div data-tp="modal" style={{ ...s.modal, width: 460 }}>
                     <h3 style={s.modalTitle}>Añadir a un equipo</h3>
                     <label style={s.label}>
                       Equipo
@@ -3068,16 +3273,52 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
                         {availableTeams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                       </select>
                     </label>
-                    <label style={s.label}>
-                      Rol en el equipo <span style={{ color: C.muted, fontWeight: 400 }}>(opcional)</span>
-                      <input style={s.input} value={pickedTeamRole} onChange={e => setPickedTeamRole(e.target.value)} placeholder="p. ej. Pianista, Líder, Vocalista…" />
-                    </label>
+                    <div style={{ ...s.label, display: 'block' }}>
+                      <span>Posiciones <span style={{ color: C.muted, fontWeight: 400 }}>(opcional, marca todas las que apliquen)</span></span>
+                      <div style={{ marginTop: 8, maxHeight: 220, overflowY: 'auto', border: `1px solid ${C.border}`, borderRadius: 8, padding: 6, background: C.surface }}>
+                        {pickedTeamPositions.length === 0
+                          ? <div style={{ padding: '12px 8px', fontSize: 12, color: C.muted, fontStyle: 'italic', textAlign: 'center' as const }}>
+                              Este equipo aún no tiene posiciones. Se añadirá sólo como miembro general.
+                            </div>
+                          : pickedTeamPositions.map(p => {
+                              const checked = pickedPositionIds.includes(p.id)
+                              return (
+                                <label key={p.id}
+                                  onClick={() => setPickedPositionIds(prev => checked ? prev.filter(x => x !== p.id) : [...prev, p.id])}
+                                  style={{
+                                    display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px',
+                                    borderRadius: 6, cursor: 'pointer', userSelect: 'none' as const,
+                                    background: checked ? C.primaryLight : 'transparent',
+                                    transition: 'background 0.12s',
+                                  }}
+                                  onMouseEnter={e => !checked && (e.currentTarget.style.background = C.soft)}
+                                  onMouseLeave={e => !checked && (e.currentTarget.style.background = 'transparent')}>
+                                  <input type="checkbox" checked={checked} readOnly style={{ accentColor: C.primary }} />
+                                  <span style={{ fontSize: 13, color: C.text, fontWeight: checked ? 600 : 400 }}>{p.name}</span>
+                                </label>
+                              )
+                            })
+                        }
+                      </div>
+                    </div>
                     <div style={s.modalActions}>
-                      <button style={s.btnGhost} onClick={() => setTeamPickerOpen(false)}>Cancelar</button>
-                      <button style={s.btnPrimary} onClick={addToTeam}>Añadir</button>
+                      <button style={s.btnGhost} onClick={() => setTeamPickerOpen(false)} disabled={addingTeamBusy}>Cancelar</button>
+                      <button style={s.btnPrimary} onClick={addToTeam} disabled={addingTeamBusy || !pickedTeamId}>
+                        {addingTeamBusy ? 'Añadiendo…' : 'Añadir'}
+                      </button>
                     </div>
                   </div>
                 </div>
+              )}
+
+              {welcomeAfterAdd && (
+                <ComposeEmailModal
+                  slug={slug}
+                  defaultRecipient={person}
+                  autoApplyKind="team_welcome"
+                  contextTeamId={welcomeAfterAdd.teamId}
+                  onClose={() => setWelcomeAfterAdd(null)}
+                  onSent={() => setWelcomeAfterAdd(null)} />
               )}
             </div>
           </div>
@@ -3354,6 +3595,23 @@ function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
           </div>
         </div>
       )}
+
+      {showModulePermsStub && (
+        <div style={s.overlay} onClick={e => e.target === e.currentTarget && setShowModulePermsStub(false)}>
+          <div style={{ ...s.modal, width: 480 }}>
+            <h3 style={s.modalTitle}>Permisos por módulo</h3>
+            <div style={{ background: '#FEF3C7', border: '1px solid #FCD34D', color: '#92400E', borderRadius: 8, padding: 14, fontSize: 13, lineHeight: 1.55 }}>
+              <strong>Próximamente.</strong> Aquí podrás afinar el acceso por módulo
+              (Servicios, Canciones, Media, Eventos, Calendario, Finanzas) por separado
+              y por tipo de servicio. Esta funcionalidad se implementará en la Fase 3
+              cuando todos los módulos estén operativos.
+            </div>
+            <div style={s.modalActions}>
+              <button style={s.btnPrimary} onClick={() => setShowModulePermsStub(false)}>Entendido</button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }
@@ -3461,7 +3719,9 @@ function PersonasView({ slug, teams, setTeams, types, resetSignal }: {
     return (
       <TeamDetailView slug={slug} team={selectedTeam} allTeams={teams}
         orgMembers={orgMembers} types={types} currentMemberId={currentMemberId}
-        onBack={() => setSelectedTeamId(null)}
+        onPeopleInvalidate={reloadPeople}
+        onOpenPerson={pid => { setSelectedTeamId(null); setSelectedPersonId(pid) }}
+        onBack={() => { setSelectedTeamId(null); reloadPeople() }}
         onTeamChanged={t => setTeams(prev => prev.map(x => x.id === t.id ? t : x))}
         onTeamDeleted={id => { setTeams(prev => prev.filter(x => x.id !== id)); setSelectedTeamId(null) }} />
     )
@@ -3515,6 +3775,7 @@ function PersonasView({ slug, teams, setTeams, types, resetSignal }: {
                     <th style={s.planTh}>Email</th>
                     <th style={s.planTh}>Permisos en Servicios</th>
                     <th style={s.planTh}>Estado</th>
+                    <th style={s.planTh}>Bienvenida</th>
                     <th style={{ ...s.planTh, background: '#FEF3C7', color: '#92400E' }}>Contraseña (test)</th>
                     <th style={s.planTh}></th>
                   </tr>
@@ -3544,9 +3805,14 @@ function PersonasView({ slug, teams, setTeams, types, resetSignal }: {
                         </select>
                       </td>
                       <td style={s.planTd}>
+                        {p.is_active === false
+                          ? <span style={{ ...s.pill, background: '#FEE2E2', color: '#991B1B', border: '1px solid #FCA5A5', fontWeight: 700 }}>Deshabilitado</span>
+                          : <span style={{ ...s.pill, background: C.successLight, color: C.success, fontWeight: 600 }}>Habilitado</span>}
+                      </td>
+                      <td style={s.planTd}>
                         {p.welcomed_at
-                          ? <span style={{ ...s.pill, background: C.successLight, color: C.success }}>Bienvenido</span>
-                          : <span style={{ ...s.pill, background: C.soft, color: C.muted }}>Pendiente</span>}
+                          ? <span style={{ ...s.pill, background: C.successLight, color: C.success, fontWeight: 600 }}>Bienvenido</span>
+                          : <span style={{ ...s.pill, background: '#FEF3C7', color: '#92400E', border: '1px solid #FCD34D', fontWeight: 600 }}>Pendiente</span>}
                       </td>
                       <td style={{ ...s.planTd, background: '#FFFBEB', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
                         {p.org_role === 'admin'
@@ -3845,12 +4111,76 @@ function AddPositionModal({ slug, teamId, existingNames, onCreated, onClose }: {
   )
 }
 
+function AddLeaderModal({ slug, teamId, orgMembers, excludedIds, onAdded, onClose }: {
+  slug: string; teamId: string
+  orgMembers: OrgMemberLite[]
+  excludedIds: Set<string>
+  onAdded: (t: Team) => void
+  onClose: () => void
+}) {
+  useEscape(onClose)
+  const [search, setSearch] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const candidates = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return orgMembers
+      .filter(m => !excludedIds.has(m.id) && (!q || (m.full_name || '').toLowerCase().includes(q) || m.email.toLowerCase().includes(q)))
+      .sort((a, b) => (a.full_name || a.email).toLowerCase().localeCompare((b.full_name || b.email).toLowerCase(), 'es'))
+  }, [orgMembers, excludedIds, search])
+
+  async function pick(memberId: string) {
+    setBusy(true); setErr('')
+    const r = await api(`/api/v1/tenant/${slug}/teams/${teamId}/leaders`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ member_id: memberId }),
+    })
+    if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); setBusy(false); return }
+    onAdded(await r.json() as Team)
+  }
+
+  return (
+    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ ...s.modal, width: 460, maxHeight: '80vh' }}>
+        <h3 style={s.modalTitle}>Añadir líder</h3>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por nombre o email…"
+          style={{ ...s.input, marginBottom: 10 }} autoFocus />
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, maxHeight: 360, overflowY: 'auto' }}>
+          {candidates.length === 0 ? (
+            <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>No hay personas disponibles</div>
+          ) : candidates.map(m => (
+            <button key={m.id} disabled={busy} onClick={() => pick(m.id)}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', width: '100%',
+                background: 'none', border: 'none', borderBottom: `1px solid ${C.border}`, cursor: busy ? 'wait' : 'pointer',
+                textAlign: 'left' as const, transition: 'background 0.12s' }}
+              onMouseEnter={e => !busy && (e.currentTarget.style.background = C.soft)}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+              <div style={{ width: 26, height: 26, borderRadius: 999, background: m.avatar ? `url(${m.avatar}) center/cover` : C.soft, color: C.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+                {!m.avatar && (m.full_name?.[0]?.toUpperCase() || m.email[0]?.toUpperCase())}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 500, color: C.text, fontSize: 13 }}>{m.full_name || '—'}</div>
+                <div style={{ fontSize: 11, color: C.muted }}>{m.email}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+        {err && <p style={s.errorText}>{err}</p>}
+        <div style={s.modalActions}>
+          <button type="button" style={s.btnGhost} onClick={onClose}>Cancelar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function AddPersonsToPositionModal({ slug, teamId, position, orgMembers, serviceMemberIds, excludedIds, onDone, onClose }: {
   slug: string; teamId: string; position: TeamPositionInfo
   orgMembers: OrgMemberLite[]
   serviceMemberIds: Set<string>
   excludedIds: Set<string>
-  onDone: (newlyEnrolled: ServicePerson[]) => void
+  onDone: (newlyEnrolled: ServicePerson[], alreadyEnrolledAdded: ServicePerson[]) => void
   onClose: () => void
 }) {
   useEscape(onClose)
@@ -3861,7 +4191,9 @@ function AddPersonsToPositionModal({ slug, teamId, position, orgMembers, service
 
   const candidates = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return orgMembers.filter(m => !excludedIds.has(m.id) && (!q || (m.full_name || '').toLowerCase().includes(q) || m.email.toLowerCase().includes(q)))
+    return orgMembers
+      .filter(m => !excludedIds.has(m.id) && (!q || (m.full_name || '').toLowerCase().includes(q) || m.email.toLowerCase().includes(q)))
+      .sort((a, b) => (a.full_name || a.email).toLowerCase().localeCompare((b.full_name || b.email).toLowerCase(), 'es'))
   }, [orgMembers, excludedIds, search])
 
   function toggle(id: string) {
@@ -3887,15 +4219,28 @@ function AddPersonsToPositionModal({ slug, teamId, position, orgMembers, service
     })
     if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); setBusy(false); return }
     const out = await r.json()
-    const enrolled: ServicePerson[] = (out.newly_enrolled || []).map((x: any) => ({
-      id: x.service_member_id, member_id: x.member_id,
+    const mk = (x: any, enrolledRole = 'viewer'): ServicePerson => ({
+      id: x.service_member_id || x.member_id, member_id: x.member_id,
       full_name: x.full_name, email: x.email,
       avatar: null, org_role: 'member',
-      service_role: 'viewer', songs_role: 'viewer', media_role: 'viewer',
+      service_role: enrolledRole as any, songs_role: 'viewer', media_role: 'viewer',
       file_access: { plans: true, songs: true, media: true },
       type_permissions: [], welcomed_at: null, password_set: false,
-    } as ServicePerson))
-    onDone(enrolled)
+    } as ServicePerson)
+    const newly: ServicePerson[] = (out.newly_enrolled || []).map((x: any) => mk(x))
+    // Picked who were already in Services AND were truly added to this position (not skipped duplicates)
+    const newlyIds = new Set(newly.map(n => n.member_id))
+    const addedIds: string[] = out.added || []
+    const skippedIds = new Set<string>(out.skipped || [])
+    const already: ServicePerson[] = []
+    for (const id of addedIds) {
+      if (newlyIds.has(id) || skippedIds.has(id)) continue
+      const m = orgMembers.find(x => x.id === id)
+      if (m && m.role !== 'admin') {
+        already.push(mk({ member_id: m.id, full_name: m.full_name, email: m.email }))
+      }
+    }
+    onDone(newly, already)
   }
 
   return (
@@ -3976,7 +4321,10 @@ function RecipientAdder({ slug, excludedIds, onPick }: {
   }, [slug])
   const candidates = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return members.filter(m => !excludedIds.has(m.id) && (!q || (m.full_name || '').toLowerCase().includes(q) || m.email.toLowerCase().includes(q))).slice(0, 20)
+    return members
+      .filter(m => !excludedIds.has(m.id) && (!q || (m.full_name || '').toLowerCase().includes(q) || m.email.toLowerCase().includes(q)))
+      .sort((a, b) => (a.full_name || a.email).toLowerCase().localeCompare((b.full_name || b.email).toLowerCase(), 'es'))
+      .slice(0, 20)
   }, [members, excludedIds, search])
   return (
     <div style={{ marginTop: 8 }}>
@@ -4000,8 +4348,8 @@ function RecipientAdder({ slug, excludedIds, onPick }: {
   )
 }
 
-function TeamBulkEmailModal({ slug, recipients, onClose, onSent }: {
-  slug: string; recipients: TeamPerson[]
+function TeamBulkEmailModal({ slug, recipients, teamId, onClose, onSent }: {
+  slug: string; recipients: TeamPerson[]; teamId?: string
   onClose: () => void; onSent: () => void
 }) {
   useEscape(onClose)
@@ -4017,10 +4365,12 @@ function TeamBulkEmailModal({ slug, recipients, onClose, onSent }: {
   const bodyRef = React.useRef<RichTextEditorHandle>(null)
   const subjectRef = React.useRef<HTMLInputElement>(null)
   const [addOpen, setAddOpen] = useState(false)
+  const [tplsManagerOpen, setTplsManagerOpen] = useState(false)
 
-  useEffect(() => {
+  const reloadTpls = useCallback(() => {
     api(`/api/v1/tenant/${slug}/email/templates`).then(r => r.ok ? r.json() : []).then(setTemplates)
   }, [slug])
+  useEffect(() => { reloadTpls() }, [reloadTpls])
 
   function applyTemplate(id: string) {
     setTplId(id)
@@ -4041,7 +4391,7 @@ function TeamBulkEmailModal({ slug, recipients, onClose, onSent }: {
     if (list.length === 0) { setErr('Sin destinatarios'); return }
     const r = await api(`/api/v1/tenant/${slug}/email/messages/preview`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipient_member_id: list[0].member_id, subject, body }),
+      body: JSON.stringify({ recipient_member_id: list[0].member_id, subject, body, team_id: teamId || null }),
     })
     if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); return }
     setPreview(await r.json())
@@ -4055,6 +4405,7 @@ function TeamBulkEmailModal({ slug, recipients, onClose, onSent }: {
       body: JSON.stringify({
         recipient_member_ids: list.map(x => x.member_id),
         template_id: tplId || null, subject, body,
+        team_id: teamId || null,
       }),
     })
     if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); setBusy(false); return }
@@ -4076,6 +4427,14 @@ function TeamBulkEmailModal({ slug, recipients, onClose, onSent }: {
               <option value="">— Sin plantilla —</option>
               {templates.map(t => <option key={t.id} value={t.id}>{KIND_LABEL[t.kind]} · {t.name}</option>)}
             </select>
+            <button type="button" onClick={() => setTplsManagerOpen(true)}
+              title="Gestionar plantillas"
+              style={{ ...s.btnGhost, padding: '6px 10px', fontSize: 12, gap: 4 }}>
+              <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+              Plantillas
+            </button>
           </div>
 
           <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: '8px 12px' }}>
@@ -4146,6 +4505,11 @@ function TeamBulkEmailModal({ slug, recipients, onClose, onSent }: {
           </div>
         </div>
       </div>
+
+      {tplsManagerOpen && (
+        <TemplatesManagerModal slug={slug}
+          onClose={() => { setTplsManagerOpen(false); reloadTpls() }} />
+      )}
     </div>
   )
 }
@@ -4653,7 +5017,7 @@ function TeamSettingsTab({ slug, team, allTeams, types, onTeamChanged, onTeamDel
   )
 }
 
-function TeamDetailView({ slug, team, allTeams, orgMembers, types, currentMemberId, onBack, onTeamChanged, onTeamDeleted }: {
+function TeamDetailView({ slug, team, allTeams, orgMembers, types, currentMemberId, onBack, onTeamChanged, onTeamDeleted, onPeopleInvalidate, onOpenPerson }: {
   slug: string
   team: Team
   allTeams: Team[]
@@ -4663,19 +5027,23 @@ function TeamDetailView({ slug, team, allTeams, orgMembers, types, currentMember
   onBack: () => void
   onTeamChanged: (t: Team) => void
   onTeamDeleted: (id: string) => void
+  onPeopleInvalidate?: () => void
+  onOpenPerson?: (serviceMemberId: string) => void
 }) {
   const [tab, setTab] = useState<'settings' | 'members' | 'automations'>('members')
   const [detail, setDetail] = useState<TeamDetailPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectedView, setSelectedView] = useState<{ kind: 'all' | 'leaders' | 'position'; positionId?: string }>({ kind: 'all' })
   const [addPositionOpen, setAddPositionOpen] = useState(false)
+  const [addLeaderOpen, setAddLeaderOpen] = useState(false)
   const [addMembersFor, setAddMembersFor] = useState<TeamPositionInfo | null>(null)
   const [emailRecipients, setEmailRecipients] = useState<TeamPerson[] | null>(null)
   const [editingTeamOpen, setEditingTeamOpen] = useState(false)
   // Members already in Services (used to badge "Nuevo en Servicios" in the picker)
   const [serviceMemberIds, setServiceMemberIds] = useState<Set<string>>(new Set())
-  // Queue of newly-enrolled people waiting for the welcome compose modal
-  const [welcomeQueue, setWelcomeQueue] = useState<ServicePerson[]>([])
+  // Queue of compose-modal items waiting after position add.
+  // kind='welcome' = brand-new to Services (magic link). kind='team_welcome' = already in Services, joining a new team.
+  const [welcomeQueue, setWelcomeQueue] = useState<Array<{ p: ServicePerson; kind: 'welcome' | 'team_welcome' }>>([])
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -4724,6 +5092,29 @@ function TeamDetailView({ slug, team, allTeams, orgMembers, types, currentMember
     if (!confirm('¿Quitar esta persona de la posición?')) return
     const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}/positions/${posId}/members/${memberId}`, { method: 'DELETE' })
     if (r.ok) reload()
+  }
+
+  async function removeLeader(memberId: string) {
+    if (!confirm('¿Quitar este líder del equipo?')) return
+    const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}/leaders/${memberId}`, { method: 'DELETE' })
+    if (r.ok) {
+      const t = await r.json() as Team
+      onTeamChanged(t)
+      reload()
+    } else {
+      const j = await r.json().catch(() => ({} as any))
+      alert(j.detail || 'No se pudo quitar')
+    }
+  }
+
+  // Find ServiceMember id from a member_id and bubble up to PersonasView
+  async function openPerson(memberId: string) {
+    if (!onOpenPerson) return
+    const r = await api(`/api/v1/tenant/${slug}/services/people`)
+    if (!r.ok) return
+    const list: { id: string; member_id: string }[] = await r.json()
+    const sp = list.find(x => x.member_id === memberId)
+    if (sp) onOpenPerson(sp.id)
   }
 
   return (
@@ -4822,12 +5213,17 @@ function TeamDetailView({ slug, team, allTeams, orgMembers, types, currentMember
                     <button onClick={() => setAddMembersFor(positionForAdding)} style={{ ...s.btnGhost, padding: '6px 12px', fontSize: 12 }}>+ Añadir persona</button>
                   </div>
                 )}
+                {selectedView.kind === 'leaders' && (
+                  <div style={{ padding: '10px 18px', borderBottom: `1px solid ${C.border}`, background: C.bg }}>
+                    <button onClick={() => setAddLeaderOpen(true)} style={{ ...s.btnGhost, padding: '6px 12px', fontSize: 12 }}>+ Añadir líder</button>
+                  </div>
+                )}
                 {visibleList.items.length === 0 ? (
                   <div style={{ padding: '40px 16px', textAlign: 'center', color: C.muted, fontSize: 13 }}>
                     {selectedView.kind === 'position'
                       ? 'Aún no hay nadie en esta posición. Usa "Añadir persona" arriba.'
                       : selectedView.kind === 'leaders'
-                        ? 'Aún no hay líderes. Edita el equipo en la pestaña Configuración para añadirlos.'
+                        ? 'Aún no hay líderes. Usa "+ Añadir líder" arriba.'
                         : 'Aún no hay miembros. Crea una posición y añade personas.'}
                   </div>
                 ) : (
@@ -4838,7 +5234,7 @@ function TeamDetailView({ slug, team, allTeams, orgMembers, types, currentMember
                         <th style={s.planTh}>Apellido</th>
                         <th style={s.planTh}>Email</th>
                         <th style={s.planTh}>Preferencias</th>
-                        {selectedView.kind === 'position' && <th style={s.planTh}></th>}
+                        {(selectedView.kind === 'position' || selectedView.kind === 'leaders') && <th style={s.planTh}></th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -4851,6 +5247,9 @@ function TeamDetailView({ slug, team, allTeams, orgMembers, types, currentMember
                         const prefStr = (prefMonth == null && prefDay == null)
                           ? 'Sin límite'
                           : `${prefMonth != null ? prefMonth + '/mes' : '—'} · ${prefDay != null ? prefDay + '/día' : '—'}`
+                        const isSelf = currentMemberId === p.member_id
+                        const isLeaderLast = selectedView.kind === 'leaders' && (detail?.leaders.length || 0) <= 1
+                        const removeLeaderDisabled = selectedView.kind === 'leaders' && (isLeaderLast || (isSelf && (detail?.leaders.length || 0) <= 1))
                         return (
                           <tr key={p.member_id}>
                             <td style={s.planTd}>
@@ -4858,7 +5257,9 @@ function TeamDetailView({ slug, team, allTeams, orgMembers, types, currentMember
                                 <div style={{ width: 26, height: 26, borderRadius: 999, background: p.avatar ? `url(${p.avatar}) center/cover` : C.soft, color: C.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
                                   {!p.avatar && (first[0]?.toUpperCase() || p.email[0]?.toUpperCase())}
                                 </div>
-                                <span style={{ fontWeight: 500, color: C.text }}>{first || '—'}</span>
+                                <button onClick={() => openPerson(p.member_id)}
+                                  style={{ background: 'none', border: 'none', padding: 0, fontWeight: 500, color: C.primary, cursor: 'pointer', fontSize: 13 }}
+                                  title="Ver perfil">{first || '—'}</button>
                               </div>
                             </td>
                             <td style={{ ...s.planTd, color: C.text, fontSize: 13 }}>{last || '—'}</td>
@@ -4868,6 +5269,18 @@ function TeamDetailView({ slug, team, allTeams, orgMembers, types, currentMember
                               <td style={{ ...s.planTd, textAlign: 'right' as const }}>
                                 <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, color: C.danger, borderColor: 'rgba(239,68,68,.3)' }}
                                   onClick={() => removeMemberFromPosition(selectedView.positionId!, p.member_id)}>Quitar</button>
+                              </td>
+                            )}
+                            {selectedView.kind === 'leaders' && (
+                              <td style={{ ...s.planTd, textAlign: 'right' as const }}>
+                                <button disabled={removeLeaderDisabled}
+                                  title={removeLeaderDisabled ? (isSelf ? 'No puedes quitarte si eres el único líder' : 'El equipo debe tener al menos un líder') : 'Quitar líder'}
+                                  style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12,
+                                    color: removeLeaderDisabled ? C.muted : C.danger,
+                                    borderColor: removeLeaderDisabled ? C.border : 'rgba(239,68,68,.3)',
+                                    cursor: removeLeaderDisabled ? 'not-allowed' : 'pointer',
+                                    opacity: removeLeaderDisabled ? 0.55 : 1 }}
+                                  onClick={() => removeLeader(p.member_id)}>Quitar</button>
                               </td>
                             )}
                           </tr>
@@ -4889,17 +5302,29 @@ function TeamDetailView({ slug, team, allTeams, orgMembers, types, currentMember
           onClose={() => setAddPositionOpen(false)} />
       )}
 
+      {addLeaderOpen && (
+        <AddLeaderModal slug={slug} teamId={team.id}
+          orgMembers={orgMembers}
+          excludedIds={new Set(detail?.leaders.map(l => l.member_id) || [])}
+          onAdded={t => { onTeamChanged(t); reload(); setAddLeaderOpen(false) }}
+          onClose={() => setAddLeaderOpen(false)} />
+      )}
+
       {addMembersFor && (
         <AddPersonsToPositionModal slug={slug} teamId={team.id} position={addMembersFor}
           orgMembers={orgMembers}
           serviceMemberIds={serviceMemberIds}
           excludedIds={new Set(addMembersFor.members.map(m => m.member_id))}
-          onDone={(newlyEnrolled) => {
+          onDone={(newlyEnrolled, alreadyEnrolledAdded) => {
             reload()
             reloadServiceMembers()
+            onPeopleInvalidate?.()
             setAddMembersFor(null)
             if (newlyEnrolled.length > 0) {
-              setWelcomeQueue(prev => [...prev, ...newlyEnrolled])
+              setWelcomeQueue(prev => [...prev, ...newlyEnrolled.map(p => ({ p, kind: 'welcome' as const }))])
+            }
+            if (alreadyEnrolledAdded.length > 0) {
+              setWelcomeQueue(prev => [...prev, ...alreadyEnrolledAdded.map(p => ({ p, kind: 'team_welcome' as const }))])
             }
           }}
           onClose={() => setAddMembersFor(null)} />
@@ -4908,14 +5333,15 @@ function TeamDetailView({ slug, team, allTeams, orgMembers, types, currentMember
       {welcomeQueue.length > 0 && (
         <ComposeEmailModal
           slug={slug}
-          defaultRecipient={welcomeQueue[0]}
-          autoApplyKind="welcome"
+          defaultRecipient={welcomeQueue[0].p}
+          autoApplyKind={welcomeQueue[0].kind}
+          contextTeamId={welcomeQueue[0].kind === 'team_welcome' ? team.id : undefined}
           onClose={() => setWelcomeQueue(q => q.slice(1))}
           onSent={() => setWelcomeQueue(q => q.slice(1))} />
       )}
 
       {emailRecipients && (
-        <TeamBulkEmailModal slug={slug} recipients={emailRecipients}
+        <TeamBulkEmailModal slug={slug} recipients={emailRecipients} teamId={team.id}
           onClose={() => setEmailRecipients(null)}
           onSent={() => setEmailRecipients(null)} />
       )}

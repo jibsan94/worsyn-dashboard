@@ -11,6 +11,7 @@ interface SecurityConfig {
   session_access_token_minutes: number
   session_refresh_token_days: number
   max_sessions_per_user: number
+  password_reset_ttl_minutes: number
   require_2fa: boolean
   // SSO / Active Directory
   sso_enabled: boolean
@@ -33,6 +34,7 @@ const DEFAULTS: SecurityConfig = {
   session_access_token_minutes: 30,
   session_refresh_token_days: 7,
   max_sessions_per_user: 0,
+  password_reset_ttl_minutes: 10,
   require_2fa: false,
   sso_enabled: false,
   sso_provider: 'ldap',
@@ -80,6 +82,7 @@ export default function SettingsSecurity() {
           session_access_token_minutes: cfg.session_access_token_minutes,
           session_refresh_token_days: cfg.session_refresh_token_days,
           max_sessions_per_user: cfg.max_sessions_per_user,
+          password_reset_ttl_minutes: cfg.password_reset_ttl_minutes,
           require_2fa: cfg.require_2fa,
           sso_enabled: cfg.sso_enabled,
           sso_provider: cfg.sso_provider,
@@ -276,6 +279,20 @@ export default function SettingsSecurity() {
                 disabled={readOnly || isLoading}
               />
               <span className="form-hint">por usuario · 0 = ilimitadas</span>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="pwd-reset-ttl">Expiración enlace de recuperación</label>
+              <input
+                id="pwd-reset-ttl"
+                className="form-input"
+                type="number"
+                min={1} max={1440}
+                value={cfg.password_reset_ttl_minutes}
+                onChange={e => set('password_reset_ttl_minutes', Number(e.target.value))}
+                disabled={readOnly || isLoading}
+              />
+              <span className="form-hint">minutos · enlace de "Restablece tu contraseña" del tenant · actual: {cfg.password_reset_ttl_minutes} min (rango 1–1440)</span>
             </div>
           </div>
         </section>
