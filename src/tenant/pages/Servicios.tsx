@@ -73,7 +73,28 @@ interface ServiceType {
   team_ids: string[]
 }
 interface ServicePlan { id: string; title: string; status: string; scheduled_at: string | null; service_type_id: string | null }
-interface Team { id: string; name: string; color: string | null; description: string | null; member_count: number }
+interface Team {
+  id: string
+  name: string
+  color: string | null
+  description: string | null
+  member_count: number
+  is_rehearsal?: boolean
+  is_secure?: boolean
+  is_split?: boolean
+  leader_member_ids?: string[]
+  service_type_ids?: string[]
+  related_team_ids?: string[]
+  // Settings fields
+  default_status?: string
+  notify_on_prepare?: boolean
+  replies_to?: string
+  gap_alerts_enabled?: boolean
+  last_scheduled_date_rule?: string
+  scheduled_viewer_access?: string
+  signup_sheets_auto_enable?: boolean
+  reschedule_on_decline?: string
+}
 interface Occurrence {
   service_type_id: string
   service_type_name: string
@@ -798,17 +819,47 @@ function WelcomeView({ onCreate }: { onCreate: () => void }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Personas — Teams CRUD section
 // ─────────────────────────────────────────────────────────────────────────────
-function TeamFormModal({ slug, initial, onSaved, onClose }: {
+function TeamFormModal({ slug, initial, orgMembers, types, currentMemberId, onSaved, onClose }: {
   slug: string
   initial?: Team | null
+  orgMembers: OrgMemberLite[]
+  types: ServiceType[]
+  currentMemberId: string | null
   onSaved: (t: Team) => void
   onClose: () => void
 }) {
+  useEscape(onClose)
+  const [mode, setMode] = useState<'new' | 'copy'>('new')
   const [name, setName] = useState(initial?.name || '')
   const [color, setColor] = useState(initial?.color || '#4F46E5')
   const [description, setDescription] = useState(initial?.description || '')
+  const [leaderIds, setLeaderIds] = useState<string[]>(
+    initial?.leader_member_ids?.length
+      ? initial.leader_member_ids
+      : (!initial && currentMemberId ? [currentMemberId] : [])
+  )
+  const [serviceTypeIds, setServiceTypeIds] = useState<string[]>(initial?.service_type_ids || [])
+  const [isRehearsal, setIsRehearsal] = useState(!!initial?.is_rehearsal)
+  const [isSecure, setIsSecure] = useState(!!initial?.is_secure)
+  const [isSplit, setIsSplit] = useState(!!initial?.is_split)
+  const [leaderQuery, setLeaderQuery] = useState('')
+  const [showLeaderPicker, setShowLeaderPicker] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+
+  const leaderObjs = useMemo(() => leaderIds.map(id => orgMembers.find(m => m.id === id)).filter(Boolean) as OrgMemberLite[], [leaderIds, orgMembers])
+  const leaderCandidates = useMemo(() => {
+    const q = leaderQuery.trim().toLowerCase()
+    const taken = new Set(leaderIds)
+    return orgMembers.filter(m => !taken.has(m.id) && (!q || (m.full_name || '').toLowerCase().includes(q) || m.email.toLowerCase().includes(q))).slice(0, 8)
+  }, [orgMembers, leaderIds, leaderQuery])
+
+  function toggleType(id: string) {
+    setServiceTypeIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
+  function toggleAllTypes() {
+    setServiceTypeIds(prev => prev.length === types.length ? [] : types.map(t => t.id))
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -821,21 +872,67 @@ function TeamFormModal({ slug, initial, onSaved, onClose }: {
       const res = await api(url, {
         method: initial ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), color, description }),
+        body: JSON.stringify({
+          name: name.trim(),
+          color,
+          description,
+          is_rehearsal: isRehearsal,
+          is_secure: isSecure,
+          is_split: isSplit,
+          leader_member_ids: leaderIds,
+          service_type_ids: serviceTypeIds,
+        }),
       })
       if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.detail || 'Error') }
       onSaved(await res.json())
     } catch (e: any) { setErr(e.message); setBusy(false) }
   }
 
+  const flagCard = (active: boolean, onToggle: () => void, icon: string, title: string, desc: string) => (
+    <div onClick={onToggle}
+      style={{
+        border: `1px solid ${active ? C.primary : C.border}`,
+        background: active ? 'rgba(79,70,229,0.04)' : C.surface,
+        borderRadius: 10, padding: 12, cursor: 'pointer',
+        display: 'flex', gap: 10, alignItems: 'flex-start',
+      }}>
+      <div style={{
+        width: 18, height: 18, borderRadius: 4, border: `1px solid ${active ? C.primary : C.border}`,
+        background: active ? C.primary : 'transparent', flexShrink: 0, marginTop: 2,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 12, fontWeight: 700,
+      }}>{active ? '✓' : ''}</div>
+      <div style={{ flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+          <span style={{ fontSize: 16 }}>{icon}</span>
+          <span style={{ fontWeight: 600, fontSize: 13, color: C.text }}>{title}</span>
+        </div>
+        <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.4 }}>{desc}</div>
+      </div>
+    </div>
+  )
+
   return (
     <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <form style={{ ...s.modal, width: 420 }} onSubmit={submit}>
-        <h3 style={s.modalTitle}>{initial ? 'Editar equipo' : 'Nuevo equipo'}</h3>
+      <form style={{ ...s.modal, width: 560, maxHeight: '90vh', overflowY: 'auto' }} onSubmit={submit}>
+        <h3 style={s.modalTitle}>{initial ? 'Editar equipo' : 'Añadir equipo'}</h3>
+
+        {!initial && (
+          <div style={{ display: 'flex', gap: 0, marginBottom: 14, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden', width: 'fit-content' }}>
+            <button type="button" onClick={() => setMode('new')}
+              style={{ padding: '6px 16px', fontSize: 13, border: 'none', cursor: 'pointer',
+                background: mode === 'new' ? C.primary : 'transparent',
+                color: mode === 'new' ? 'white' : C.text, fontWeight: 600 }}>Nuevo</button>
+            <button type="button" disabled title="Próximamente"
+              style={{ padding: '6px 16px', fontSize: 13, border: 'none',
+                background: 'transparent', color: C.light, cursor: 'not-allowed', fontWeight: 500 }}>Copiar</button>
+          </div>
+        )}
+
         <label style={s.label}>
-          Nombre
+          Nombre del equipo
           <input style={s.input} autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="p. ej. Equipo de Adoración" />
         </label>
+
         <label style={s.label}>
           Color
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -844,16 +941,114 @@ function TeamFormModal({ slug, initial, onSaved, onClose }: {
             <span style={{ fontSize: 12, color: C.muted, fontFamily: 'monospace' }}>{color}</span>
           </div>
         </label>
+
+        <div style={s.label}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Líderes del equipo</span>
+            <span style={{ fontSize: 11, color: C.muted, fontWeight: 400 }}>{leaderObjs.length} seleccionado{leaderObjs.length === 1 ? '' : 's'}</span>
+          </div>
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: 8, minHeight: 44, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+            {leaderObjs.map(m => (
+              <span key={m.id} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                background: C.soft, borderRadius: 999, padding: '4px 10px', fontSize: 12, color: C.text,
+              }}>
+                {m.full_name || m.email}
+                <button type="button" onClick={() => setLeaderIds(prev => prev.filter(x => x !== m.id))}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, padding: 0, fontSize: 14, lineHeight: 1 }}>×</button>
+              </span>
+            ))}
+            <div style={{ position: 'relative', flex: '1 1 120px', minWidth: 120 }}>
+              <input
+                value={leaderQuery}
+                onChange={e => { setLeaderQuery(e.target.value); setShowLeaderPicker(true) }}
+                onFocus={() => setShowLeaderPicker(true)}
+                onBlur={() => setTimeout(() => setShowLeaderPicker(false), 150)}
+                placeholder={leaderObjs.length ? 'Añadir otro…' : 'Buscar persona…'}
+                style={{ width: '100%', border: 'none', outline: 'none', fontSize: 13, padding: '4px 2px', background: 'transparent' }}
+              />
+              {showLeaderPicker && leaderCandidates.length > 0 && (
+                <div style={{
+                  position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, zIndex: 10,
+                  background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
+                  boxShadow: '0 6px 20px rgba(0,0,0,0.08)', maxHeight: 220, overflowY: 'auto',
+                }}>
+                  {leaderCandidates.map(m => (
+                    <div key={m.id}
+                      onMouseDown={e => { e.preventDefault(); setLeaderIds(prev => [...prev, m.id]); setLeaderQuery('') }}
+                      style={{ padding: '8px 10px', cursor: 'pointer', fontSize: 13, color: C.text, display: 'flex', flexDirection: 'column', gap: 1 }}
+                      onMouseEnter={e => (e.currentTarget.style.background = C.soft)}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                      <span style={{ fontWeight: 500 }}>{m.full_name || '—'}</span>
+                      <span style={{ fontSize: 11, color: C.muted }}>{m.email}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div style={s.label}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Tipos de servicio</span>
+            {types.length > 0 && (
+              <button type="button" onClick={toggleAllTypes}
+                style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, cursor: 'pointer', fontWeight: 500, padding: 0 }}>
+                {serviceTypeIds.length === types.length ? 'Quitar todos' : 'Seleccionar todos'}
+              </button>
+            )}
+          </div>
+          {types.length === 0 ? (
+            <div style={{ fontSize: 12, color: C.muted, padding: '8px 4px' }}>No hay tipos de servicio aún.</div>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {types.map(t => {
+                const active = serviceTypeIds.includes(t.id)
+                return (
+                  <button key={t.id} type="button" onClick={() => toggleType(t.id)}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      padding: '5px 12px', borderRadius: 999, fontSize: 12, cursor: 'pointer',
+                      border: `1px solid ${active ? C.primary : C.border}`,
+                      background: active ? 'rgba(79,70,229,0.08)' : C.surface,
+                      color: active ? C.primary : C.text, fontWeight: active ? 600 : 500,
+                    }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 2, background: t.color || C.primary, flexShrink: 0 }} />
+                    {t.name}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        <div style={s.label}>
+          <span>Tipo de equipo</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {flagCard(isRehearsal, () => setIsRehearsal(v => !v), '🎵',
+              'Equipo de ensayo',
+              'Acceso a canciones, partituras y media del servicio asignado.')}
+            {flagCard(isSecure, () => setIsSecure(v => !v), '🛡️',
+              'Equipo seguro',
+              'Sólo personas con verificación de antecedentes podrán ser asignadas.')}
+            {flagCard(isSplit, () => setIsSplit(v => !v), '⏱️',
+              'Equipo dividido',
+              'Permite distintas personas por franja cuando hay varios servicios el mismo día.')}
+          </div>
+        </div>
+
         <label style={s.label}>
           Descripción
           <textarea value={description} onChange={e => setDescription(e.target.value)}
             placeholder="Opcional: rol del equipo en el servicio"
-            style={{ ...s.input, minHeight: 70, resize: 'vertical' as const, fontFamily: 'inherit' }} />
+            style={{ ...s.input, minHeight: 60, resize: 'vertical' as const, fontFamily: 'inherit' }} />
         </label>
+
         {err && <p style={s.errorText}>{err}</p>}
         <div style={s.modalActions}>
           <button type="button" style={s.btnGhost} onClick={onClose}>Cancelar</button>
-          <button type="submit" disabled={busy} style={s.btnPrimary}>{busy ? '…' : initial ? 'Guardar' : 'Crear'}</button>
+          <button type="submit" disabled={busy} style={s.btnPrimary}>{busy ? '…' : initial ? 'Guardar' : 'Crear equipo'}</button>
         </div>
       </form>
     </div>
@@ -2001,9 +2196,10 @@ const RichTextEditor = React.forwardRef<RichTextEditorHandle, {
   )
 })
 
-function ComposeEmailModal({ slug, defaultRecipient, onClose, onSent }: {
+function ComposeEmailModal({ slug, defaultRecipient, autoApplyKind, onClose, onSent }: {
   slug: string
   defaultRecipient: ServicePerson
+  autoApplyKind?: EmailKind
   onClose: () => void
   onSent: (sent: EmailMessage[]) => void
 }) {
@@ -2018,6 +2214,7 @@ function ComposeEmailModal({ slug, defaultRecipient, onClose, onSent }: {
   const bodyRef = React.useRef<RichTextEditorHandle>(null)
   const subjectRef = React.useRef<HTMLInputElement>(null)
   const [bodyKey, setBodyKey] = useState(0)   // bumps to remount editor when template applied
+  const [autoApplied, setAutoApplied] = useState(false)
   useEscape(onClose)
 
   const reloadTemplates = useCallback(async () => {
@@ -2031,6 +2228,15 @@ function ComposeEmailModal({ slug, defaultRecipient, onClose, onSent }: {
     const t = templates.find(x => x.id === id)
     if (t) { setSubject(t.subject); setBody(t.body); setBodyKey(k => k + 1) }
   }
+
+  // Auto-apply a template by kind (first matching) — used by the team-position
+  // welcome flow so the admin sees the welcome email already filled in.
+  useEffect(() => {
+    if (!autoApplyKind || autoApplied || templates.length === 0) return
+    const t = templates.find(x => x.kind === autoApplyKind) || templates.find(x => x.kind === autoApplyKind && x.is_default)
+    if (t) { applyTemplate(t.id); setAutoApplied(true) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templates, autoApplyKind, autoApplied])
   function insertIntoBody(tok: string) { bodyRef.current?.insert(tok) }
   function insertIntoSubject(tok: string) {
     const el = subjectRef.current
@@ -3170,6 +3376,7 @@ function PersonasView({ slug, teams, setTeams, types, resetSignal }: {
   const [wizardOpen, setWizardOpen] = useState(false)
   const [currentMemberId, setCurrentMemberId] = useState<string | null>(null)
   const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null)
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null)
 
   const reloadPeople = useCallback(async () => {
     setLoading(true)
@@ -3191,6 +3398,7 @@ function PersonasView({ slug, teams, setTeams, types, resetSignal }: {
   useEffect(() => {
     if (resetSignal === undefined) return
     setSelectedPersonId(null)
+    setSelectedTeamId(null)
   }, [resetSignal])
 
   const existingMemberIds = useMemo(() => new Set(people.map(p => p.member_id)), [people])
@@ -3245,6 +3453,17 @@ function PersonasView({ slug, teams, setTeams, types, resetSignal }: {
       <PersonDetailView slug={slug} person={selected} allTeams={teams}
         onBack={() => setSelectedPersonId(null)}
         onChanged={updated => setPeople(prev => prev.map(x => x.id === updated.id ? updated : x))} />
+    )
+  }
+
+  const selectedTeam = selectedTeamId ? teams.find(t => t.id === selectedTeamId) : null
+  if (selectedTeam) {
+    return (
+      <TeamDetailView slug={slug} team={selectedTeam} allTeams={teams}
+        orgMembers={orgMembers} types={types} currentMemberId={currentMemberId}
+        onBack={() => setSelectedTeamId(null)}
+        onTeamChanged={t => setTeams(prev => prev.map(x => x.id === t.id ? t : x))}
+        onTeamDeleted={id => { setTeams(prev => prev.filter(x => x.id !== id)); setSelectedTeamId(null) }} />
     )
   }
 
@@ -3400,28 +3619,54 @@ function PersonasView({ slug, teams, setTeams, types, resetSignal }: {
                 <thead>
                   <tr>
                     <th style={s.planTh}>Equipo</th>
-                    <th style={s.planTh}>Descripción</th>
+                    <th style={s.planTh}>Tipo</th>
+                    <th style={s.planTh}>Líderes</th>
                     <th style={s.planTh}>Miembros</th>
                     <th style={s.planTh}></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {teams.map(t => (
-                    <tr key={t.id}>
-                      <td style={s.planTd}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <div style={{ width: 10, height: 10, borderRadius: 3, background: t.color || C.primary, flexShrink: 0 }} />
-                          <span style={{ fontWeight: 600 }}>{t.name}</span>
-                        </div>
-                      </td>
-                      <td style={{ ...s.planTd, color: C.muted, fontSize: 12 }}>{t.description || '—'}</td>
-                      <td style={{ ...s.planTd, color: C.muted, fontSize: 12 }}>{t.member_count}</td>
-                      <td style={{ ...s.planTd, textAlign: 'right' }}>
-                        <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, marginRight: 6 }} onClick={() => setEditingTeam(t)}>Editar</button>
-                        <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, color: C.danger, borderColor: 'rgba(239,68,68,.3)' }} onClick={() => deleteTeam(t.id)}>Eliminar</button>
-                      </td>
-                    </tr>
-                  ))}
+                  {teams.map(t => {
+                    const badges: { label: string; color: string; bg: string }[] = []
+                    if (t.is_rehearsal) badges.push({ label: 'Ensayo', color: '#1D4ED8', bg: '#DBEAFE' })
+                    if (t.is_secure) badges.push({ label: 'Seguro', color: '#92400E', bg: '#FEF3C7' })
+                    if (t.is_split) badges.push({ label: 'Dividido', color: '#6B21A8', bg: '#F3E8FF' })
+                    const leaderCount = t.leader_member_ids?.length || 0
+                    return (
+                      <tr key={t.id}
+                        style={{ cursor: 'pointer', transition: 'background 0.12s' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = C.soft)}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                        onClick={() => setSelectedTeamId(t.id)}>
+                        <td style={s.planTd}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <div style={{ width: 10, height: 10, borderRadius: 3, background: t.color || C.primary, flexShrink: 0 }} />
+                            <div>
+                              <div style={{ fontWeight: 600, color: C.text }}>{t.name}</div>
+                              {t.description && <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{t.description}</div>}
+                            </div>
+                          </div>
+                        </td>
+                        <td style={s.planTd}>
+                          {badges.length === 0
+                            ? <span style={{ fontSize: 11, color: C.muted }}>—</span>
+                            : (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                                {badges.map(b => (
+                                  <span key={b.label} style={{ ...s.pill, background: b.bg, color: b.color, fontSize: 10 }}>{b.label}</span>
+                                ))}
+                              </div>
+                            )}
+                        </td>
+                        <td style={{ ...s.planTd, color: C.muted, fontSize: 12 }}>{leaderCount}</td>
+                        <td style={{ ...s.planTd, color: C.muted, fontSize: 12 }}>{t.member_count}</td>
+                        <td style={{ ...s.planTd, textAlign: 'right' }} onClick={e => e.stopPropagation()}>
+                          <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, marginRight: 6 }} onClick={() => setEditingTeam(t)}>Editar</button>
+                          <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, color: C.danger, borderColor: 'rgba(239,68,68,.3)' }} onClick={() => deleteTeam(t.id)}>Eliminar</button>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -3431,6 +3676,7 @@ function PersonasView({ slug, teams, setTeams, types, resetSignal }: {
 
       {editingTeam !== undefined && (
         <TeamFormModal slug={slug} initial={editingTeam}
+          orgMembers={orgMembers} types={types} currentMemberId={currentMemberId}
           onSaved={t => {
             setTeams(prev => editingTeam ? prev.map(x => x.id === t.id ? t : x) : [...prev, t])
             setEditingTeam(undefined)
@@ -3442,6 +3688,1243 @@ function PersonasView({ slug, teams, setTeams, types, resetSignal }: {
         <AddPersonWizard slug={slug} types={types} orgMembers={orgMembers} existingMemberIds={existingMemberIds}
           onCreated={p => { setPeople(prev => [p, ...prev]) }}
           onClose={() => { setWizardOpen(false); reloadPeople() }} />
+      )}
+    </main>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Team Detail View — tabs (Settings / Members / Automations) + positions
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface TeamPerson {
+  member_id: string
+  full_name: string | null
+  email: string
+  avatar: string | null
+  preferences: { max_per_month: number | null; max_per_day: number | null }
+}
+interface TeamPositionInfo {
+  id: string
+  name: string
+  sort_order: number
+  member_count: number
+  members: TeamPerson[]
+}
+interface TeamDetailPayload {
+  team: Team
+  leaders: TeamPerson[]
+  positions: TeamPositionInfo[]
+  all_members: TeamPerson[]
+}
+
+function escapeHtml(str: string) {
+  return (str || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!))
+}
+
+function printTeamRoster(team: Team, title: string, items: TeamPerson[]) {
+  const w = window.open('', '_blank', 'width=800,height=900')
+  if (!w) { alert('Permite ventanas emergentes para imprimir.'); return }
+  const rows = items.map(p => {
+    const parts = (p.full_name || '').split(' ')
+    const first = parts[0] || ''
+    const last = parts.slice(1).join(' ')
+    const m = p.preferences.max_per_month, d = p.preferences.max_per_day
+    const pref = (m == null && d == null) ? 'Sin límite' : `${m != null ? m + '/mes' : '—'} · ${d != null ? d + '/día' : '—'}`
+    return `<tr><td>${escapeHtml(first || '—')}</td><td>${escapeHtml(last || '—')}</td><td>${escapeHtml(p.email)}</td><td>${escapeHtml(pref)}</td></tr>`
+  }).join('')
+  const empty = `<tr><td colspan="4" style="color:#94A3B8; text-align:center; padding:18px">Sin personas en esta vista.</td></tr>`
+  w.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${escapeHtml(team.name)} · ${escapeHtml(title)}</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #1F2937; margin: 32px; }
+.brand { display:flex; align-items:center; gap:12px; margin-bottom:22px; padding-bottom: 14px; border-bottom: 2px solid #4F46E5; }
+.brand .dot { width: 28px; height: 28px; border-radius: 8px; background: ${team.color || '#4F46E5'}; }
+.brand .name { font-size: 22px; font-weight: 700; }
+.brand .by { margin-left:auto; color:#94A3B8; font-size:11px; letter-spacing:0.15em; text-transform:uppercase; font-weight:700 }
+h1 { font-size: 18px; margin: 0 0 4px; color:#1F2937 }
+.sub { color:#64748B; font-size:13px; margin-bottom: 22px }
+table { width:100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #E2E8F0; }
+th { background:#F1F5F9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color:#475569 }
+tr:last-child td { border-bottom: none; }
+.footer { margin-top: 28px; font-size: 11px; color:#94A3B8; text-align: center; }
+@media print { .noprint { display: none } body { margin: 16mm } }
+</style></head><body>
+<div class="brand">
+  <div class="dot"></div>
+  <div class="name">${escapeHtml(team.name)}</div>
+  <div class="by">Worsyn · Servicios</div>
+</div>
+<h1>${escapeHtml(title)}</h1>
+<div class="sub">${items.length} ${items.length === 1 ? 'persona' : 'personas'} · generado ${new Date().toLocaleString('es-ES')}</div>
+<table>
+  <thead><tr><th>Nombre</th><th>Apellido</th><th>Email</th><th>Preferencias</th></tr></thead>
+  <tbody>${rows || empty}</tbody>
+</table>
+<div class="footer">Generado desde Worsyn · ${escapeHtml(team.name)}</div>
+<div class="noprint" style="margin-top:20px; text-align:center"><button onclick="window.print()" style="background:#4F46E5;color:white;border:0;padding:10px 18px;border-radius:8px;font-size:13px;cursor:pointer">Imprimir / Guardar como PDF</button></div>
+<script>setTimeout(function(){window.print()}, 300)</script>
+</body></html>`)
+  w.document.close()
+}
+
+function SidebarItem({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
+  return (
+    <button onClick={onClick}
+      style={{
+        width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: 8, padding: '8px 10px', borderRadius: 6,
+        background: active ? 'rgba(79,70,229,0.08)' : 'transparent',
+        border: 'none', cursor: 'pointer', color: active ? C.primary : C.text,
+        fontSize: 13, fontWeight: active ? 600 : 500, textAlign: 'left' as const,
+      }}>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      <span style={{
+        background: active ? C.primary : C.soft, color: active ? '#fff' : C.muted,
+        fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 999, minWidth: 18, textAlign: 'center' as const,
+      }}>{count}</span>
+    </button>
+  )
+}
+
+function IconBtn({ children, onClick, title, disabled, danger }: {
+  children: React.ReactNode; onClick: () => void; title: string; disabled?: boolean; danger?: boolean
+}) {
+  return (
+    <button onClick={onClick} title={title} disabled={disabled}
+      style={{
+        width: 32, height: 32, borderRadius: 6, border: `1px solid ${C.border}`,
+        background: C.surface, color: disabled ? C.light : (danger ? C.danger : C.text),
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        opacity: disabled ? 0.5 : 1,
+      }}>{children}</button>
+  )
+}
+
+function AddPositionModal({ slug, teamId, existingNames, onCreated, onClose }: {
+  slug: string; teamId: string; existingNames: string[]
+  onCreated: (p: TeamPositionInfo) => void; onClose: () => void
+}) {
+  useEscape(onClose)
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    const n = name.trim()
+    if (!n) { setErr('Nombre requerido'); return }
+    if (existingNames.some(x => x.toLowerCase() === n.toLowerCase())) { setErr('Ya existe una posición con ese nombre'); return }
+    setBusy(true); setErr('')
+    const r = await api(`/api/v1/tenant/${slug}/teams/${teamId}/positions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: n }),
+    })
+    if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); setBusy(false); return }
+    onCreated(await r.json())
+    onClose()
+  }
+  return (
+    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+      <form style={{ ...s.modal, width: 420 }} onSubmit={submit}>
+        <h3 style={s.modalTitle}>Añadir posición</h3>
+        <p style={{ fontSize: 12, color: C.muted, margin: '-6px 0 6px' }}>
+          Las posiciones agrupan a las personas por rol (Piano, Bajo, Guitarra acústica, etc.). Crea las que necesites.
+        </p>
+        <label style={s.label}>
+          Nombre de la posición
+          <input style={s.input} autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="p. ej. Piano" />
+        </label>
+        {err && <p style={s.errorText}>{err}</p>}
+        <div style={s.modalActions}>
+          <button type="button" style={s.btnGhost} onClick={onClose}>Cancelar</button>
+          <button type="submit" disabled={busy} style={s.btnPrimary}>{busy ? '…' : 'Crear posición'}</button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function AddPersonsToPositionModal({ slug, teamId, position, orgMembers, serviceMemberIds, excludedIds, onDone, onClose }: {
+  slug: string; teamId: string; position: TeamPositionInfo
+  orgMembers: OrgMemberLite[]
+  serviceMemberIds: Set<string>
+  excludedIds: Set<string>
+  onDone: (newlyEnrolled: ServicePerson[]) => void
+  onClose: () => void
+}) {
+  useEscape(onClose)
+  const [search, setSearch] = useState('')
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const candidates = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return orgMembers.filter(m => !excludedIds.has(m.id) && (!q || (m.full_name || '').toLowerCase().includes(q) || m.email.toLowerCase().includes(q)))
+  }, [orgMembers, excludedIds, search])
+
+  function toggle(id: string) {
+    setPicked(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+
+  // Count picked who are NOT yet in Services (excluding admins — backend skips them)
+  const pickedNewToServices = useMemo(() => {
+    const out: string[] = []
+    picked.forEach(id => {
+      const m = orgMembers.find(x => x.id === id)
+      if (m && !serviceMemberIds.has(id) && m.role !== 'admin') out.push(id)
+    })
+    return out
+  }, [picked, orgMembers, serviceMemberIds])
+
+  async function submit() {
+    if (picked.size === 0) { setErr('Selecciona al menos una persona'); return }
+    setBusy(true); setErr('')
+    const r = await api(`/api/v1/tenant/${slug}/teams/${teamId}/positions/${position.id}/members`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ member_ids: Array.from(picked) }),
+    })
+    if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); setBusy(false); return }
+    const out = await r.json()
+    const enrolled: ServicePerson[] = (out.newly_enrolled || []).map((x: any) => ({
+      id: x.service_member_id, member_id: x.member_id,
+      full_name: x.full_name, email: x.email,
+      avatar: null, org_role: 'member',
+      service_role: 'viewer', songs_role: 'viewer', media_role: 'viewer',
+      file_access: { plans: true, songs: true, media: true },
+      type_permissions: [], welcomed_at: null, password_set: false,
+    } as ServicePerson))
+    onDone(enrolled)
+  }
+
+  return (
+    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ ...s.modal, width: 520, maxHeight: '80vh' }}>
+        <h3 style={s.modalTitle}>Añadir personas a {position.name}</h3>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por nombre o email…"
+          style={{ ...s.input, marginBottom: 10 }} autoFocus />
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, maxHeight: 340, overflowY: 'auto' }}>
+          {candidates.length === 0 ? (
+            <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>
+              {orgMembers.length === excludedIds.size
+                ? 'Todas las personas ya están en esta posición.'
+                : 'No hay coincidencias.'}
+            </div>
+          ) : candidates.map(m => {
+            const checked = picked.has(m.id)
+            const isNewToServices = !serviceMemberIds.has(m.id) && m.role !== 'admin'
+            return (
+              <div key={m.id} onClick={() => toggle(m.id)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
+                  cursor: 'pointer', borderBottom: `1px solid ${C.border}`,
+                  background: checked ? 'rgba(79,70,229,0.06)' : 'transparent',
+                  transition: 'background 0.12s',
+                }}>
+                <input type="checkbox" checked={checked} readOnly />
+                <div style={{ width: 26, height: 26, borderRadius: 999, background: m.avatar ? `url(${m.avatar}) center/cover` : C.soft, color: C.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+                  {!m.avatar && (m.full_name?.[0]?.toUpperCase() || m.email[0]?.toUpperCase())}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontWeight: 500, color: C.text, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.full_name || '—'}</span>
+                    {isNewToServices && (
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, color: C.warning, background: '#FEF3C7',
+                        border: '1px solid #FCD34D', borderRadius: 999, padding: '1px 7px',
+                        letterSpacing: '0.04em', textTransform: 'uppercase',
+                      }} title="Esta persona aún no está en Servicios — se le dará de alta con permisos por defecto y se abrirá el correo de bienvenida.">
+                        ✦ Nuevo en Servicios
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 11, color: C.muted }}>{m.email}</div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>{picked.size} seleccionada{picked.size === 1 ? '' : 's'}</div>
+        {pickedNewToServices.length > 0 && (
+          <div style={{
+            marginTop: 8, padding: '10px 12px', borderRadius: 8,
+            background: '#FEF3C7', border: '1px solid #FCD34D',
+            fontSize: 12, color: '#92400E', lineHeight: 1.45,
+          }}>
+            <strong>{pickedNewToServices.length}</strong> {pickedNewToServices.length === 1 ? 'persona' : 'personas'} todavía no {pickedNewToServices.length === 1 ? 'está' : 'están'} en Servicios.
+            Al añadir, se {pickedNewToServices.length === 1 ? 'le dará' : 'les dará'} de alta con permisos por defecto (espectador) y se abrirá el correo de <strong>bienvenida</strong> para que lo revises antes de enviar.
+          </div>
+        )}
+        {err && <p style={s.errorText}>{err}</p>}
+        <div style={s.modalActions}>
+          <button type="button" style={s.btnGhost} onClick={onClose}>Cancelar</button>
+          <button type="button" disabled={busy} style={s.btnPrimary} onClick={submit}>{busy ? '…' : `Añadir${picked.size ? ' ' + picked.size : ''}`}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RecipientAdder({ slug, excludedIds, onPick }: {
+  slug: string; excludedIds: Set<string>; onPick: (p: TeamPerson) => void
+}) {
+  const [search, setSearch] = useState('')
+  const [members, setMembers] = useState<OrgMemberLite[]>([])
+  useEffect(() => {
+    api(`/api/v1/tenant/${slug}/members`).then(r => r.ok ? r.json() : []).then(setMembers)
+  }, [slug])
+  const candidates = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return members.filter(m => !excludedIds.has(m.id) && (!q || (m.full_name || '').toLowerCase().includes(q) || m.email.toLowerCase().includes(q))).slice(0, 20)
+  }, [members, excludedIds, search])
+  return (
+    <div style={{ marginTop: 8 }}>
+      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar persona…"
+        style={{ ...s.input, fontSize: 13 }} />
+      <div style={{ maxHeight: 180, overflowY: 'auto', marginTop: 6, border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface }}>
+        {candidates.length === 0
+          ? <div style={{ padding: 10, fontSize: 12, color: C.muted, textAlign: 'center' }}>No hay coincidencias</div>
+          : candidates.map(m => (
+            <div key={m.id}
+              onClick={() => onPick({ member_id: m.id, full_name: m.full_name, email: m.email, avatar: m.avatar || null, preferences: { max_per_month: null, max_per_day: null } })}
+              style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 13, display: 'flex', flexDirection: 'column' }}
+              onMouseEnter={e => (e.currentTarget.style.background = C.soft)}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+              <span style={{ color: C.text, fontWeight: 500 }}>{m.full_name || '—'}</span>
+              <span style={{ fontSize: 11, color: C.muted }}>{m.email}</span>
+            </div>
+          ))}
+      </div>
+    </div>
+  )
+}
+
+function TeamBulkEmailModal({ slug, recipients, onClose, onSent }: {
+  slug: string; recipients: TeamPerson[]
+  onClose: () => void; onSent: () => void
+}) {
+  useEscape(onClose)
+  const [templates, setTemplates] = useState<EmailTemplate[]>([])
+  const [tplId, setTplId] = useState<string>('')
+  const [subject, setSubject] = useState('')
+  const [body, setBody] = useState('')
+  const [list, setList] = useState<TeamPerson[]>(recipients)
+  const [preview, setPreview] = useState<{ subject: string; body: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [bodyKey, setBodyKey] = useState(0)
+  const bodyRef = React.useRef<RichTextEditorHandle>(null)
+  const subjectRef = React.useRef<HTMLInputElement>(null)
+  const [addOpen, setAddOpen] = useState(false)
+
+  useEffect(() => {
+    api(`/api/v1/tenant/${slug}/email/templates`).then(r => r.ok ? r.json() : []).then(setTemplates)
+  }, [slug])
+
+  function applyTemplate(id: string) {
+    setTplId(id)
+    const t = templates.find(x => x.id === id)
+    if (t) { setSubject(t.subject); setBody(t.body); setBodyKey(k => k + 1) }
+  }
+  function insertIntoBody(tok: string) { bodyRef.current?.insert(tok) }
+  function insertIntoSubject(tok: string) {
+    const el = subjectRef.current
+    if (!el) { setSubject(s => s + tok); return }
+    const start = el.selectionStart ?? subject.length, end = el.selectionEnd ?? subject.length
+    setSubject(subject.slice(0, start) + tok + subject.slice(end))
+    setTimeout(() => { el.focus(); el.setSelectionRange(start + tok.length, start + tok.length) }, 0)
+  }
+
+  async function doPreview() {
+    setErr('')
+    if (list.length === 0) { setErr('Sin destinatarios'); return }
+    const r = await api(`/api/v1/tenant/${slug}/email/messages/preview`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipient_member_id: list[0].member_id, subject, body }),
+    })
+    if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); return }
+    setPreview(await r.json())
+  }
+
+  async function send() {
+    if (list.length === 0) { setErr('Sin destinatarios'); return }
+    setErr(''); setBusy(true)
+    const r = await api(`/api/v1/tenant/${slug}/email/messages`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipient_member_ids: list.map(x => x.member_id),
+        template_id: tplId || null, subject, body,
+      }),
+    })
+    if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); setBusy(false); return }
+    await r.json()
+    onSent()
+  }
+
+  return (
+    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div data-tp="wizard-modal" style={{ ...s.modal, width: 680, padding: 0, gap: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 28px 14px', borderBottom: `1px solid ${C.border}` }}>
+          <h3 style={s.modalTitle}>Enviar correo · {list.length} destinatario{list.length === 1 ? '' : 's'}</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: C.muted, lineHeight: 1 }}>✕</button>
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: '14px 28px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <select style={{ ...s.select, flex: 1 }} value={tplId} onChange={e => applyTemplate(e.target.value)}>
+              <option value="">— Sin plantilla —</option>
+              {templates.map(t => <option key={t.id} value={t.id}>{KIND_LABEL[t.kind]} · {t.name}</option>)}
+            </select>
+          </div>
+
+          <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: '8px 12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <strong style={{ fontSize: 12, color: C.muted }}>PARA ({list.length})</strong>
+              <button type="button" onClick={() => setAddOpen(o => !o)} style={{ background: 'none', border: 'none', color: C.primary, fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>
+                {addOpen ? 'Cerrar' : '+ Añadir destinatario'}
+              </button>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {list.length === 0
+                ? <span style={{ fontSize: 12, color: C.muted, fontStyle: 'italic' }}>Sin destinatarios — añade al menos uno.</span>
+                : list.map(p => (
+                  <span key={p.member_id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 999, padding: '3px 10px', fontSize: 12 }}>
+                    {p.full_name || p.email}
+                    <button type="button" onClick={() => setList(prev => prev.filter(x => x.member_id !== p.member_id))}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, padding: 0, fontSize: 14, lineHeight: 1 }}>×</button>
+                  </span>
+                ))}
+            </div>
+            {addOpen && (
+              <RecipientAdder slug={slug} excludedIds={new Set(list.map(x => x.member_id))}
+                onPick={p => setList(prev => [...prev, p])} />
+            )}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>Asunto</label>
+              <VariablePicker onInsert={insertIntoSubject} anchorRight />
+            </div>
+            <input ref={subjectRef} style={s.input} value={subject} onChange={e => setSubject(e.target.value)}
+              placeholder="Asunto del correo" />
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>Cuerpo</label>
+            <RichTextEditor key={bodyKey} ref={bodyRef} value={body} onChange={setBody}
+              placeholder="Hola {{ to.first_name }}, …"
+              minHeight={220}
+              extraToolbar={<VariablePicker onInsert={insertIntoBody} anchorRight />} />
+          </div>
+
+          {preview && (
+            <div style={{ border: `1.5px solid ${C.primary}`, borderRadius: 10, padding: '14px 16px', background: '#fff' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingBottom: 8, borderBottom: `1px solid ${C.soft}` }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.primary, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Vista previa (1ª destinatario)</div>
+                <button onClick={() => setPreview(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 12 }}>✕ Cerrar</button>
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>
+                <strong style={{ color: C.text }}>Para:</strong> {list[0]?.full_name || list[0]?.email}
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 12 }}>{preview.subject || <em style={{ color: C.muted, fontWeight: 400 }}>(sin asunto)</em>}</div>
+              {preview.body
+                ? <div className="worsyn-rich-render" style={{ fontSize: 14, color: C.text, lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: preview.body }} />
+                : <em style={{ color: C.muted, fontSize: 13 }}>(sin cuerpo)</em>}
+            </div>
+          )}
+
+          {err && <p style={s.errorText}>{err}</p>}
+        </div>
+
+        <div style={{ ...s.modalActions, padding: '14px 28px 18px', borderTop: `1px solid ${C.border}`, marginTop: 0 }}>
+          <button style={s.btnGhost} onClick={onClose}>Cancelar</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button style={s.btnGhost} onClick={doPreview}>Vista previa</button>
+            <button style={s.btnPrimary} onClick={send} disabled={busy || list.length === 0}>{busy ? '…' : `Enviar ${list.length}`}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function teamToSettingsForm(t: Team) {
+  return {
+    is_rehearsal: !!t.is_rehearsal,
+    is_secure: !!t.is_secure,
+    is_split: !!t.is_split,
+    service_type_ids: [...(t.service_type_ids ?? [])],
+    related_team_ids: [...(t.related_team_ids ?? [])],
+    default_status: t.default_status === 'confirmed' ? 'confirmed' : 'unconfirmed',
+    notify_on_prepare: t.notify_on_prepare !== false,
+    replies_to: t.replies_to ?? 'all_leaders',
+    gap_alerts_enabled: !!t.gap_alerts_enabled,
+    last_scheduled_date_rule: t.last_scheduled_date_rule ?? 'same_as_service_type',
+    scheduled_viewer_access: t.scheduled_viewer_access ?? 'full_plan',
+    signup_sheets_auto_enable: !!t.signup_sheets_auto_enable,
+    reschedule_on_decline: t.reschedule_on_decline ?? 'manual',
+  }
+}
+
+// ── Icon set (Lucide-style, stroke 2, currentColor) ──────────────────────────
+const Ico = {
+  settings: (
+    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  ),
+  calendar: (
+    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" />
+    </svg>
+  ),
+  alert: (
+    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" />
+    </svg>
+  ),
+  sliders: (
+    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />
+    </svg>
+  ),
+  layers: (
+    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="m12 2 10 6.5L12 15 2 8.5z" /><path d="m2 17.5 10 6.5 10-6.5" /><path d="m2 13 10 6.5L22 13" />
+    </svg>
+  ),
+  users: (
+    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  ),
+  recycle: (
+    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" />
+    </svg>
+  ),
+  trash: (
+    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    </svg>
+  ),
+  check: (
+    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  ),
+  music: (
+    <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
+    </svg>
+  ),
+  shield: (
+    <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    </svg>
+  ),
+  split: (
+    <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M16 3h5v5M8 3H3v5M8 21H3v-5M16 21h5v-5" /><path d="M3 8l7 8 4-4 7 4" />
+    </svg>
+  ),
+  plus: (
+    <svg viewBox="0 0 24 24" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  ),
+}
+
+function TeamSettingsTab({ slug, team, allTeams, types, onTeamChanged, onTeamDeleted }: {
+  slug: string
+  team: Team
+  allTeams: Team[]
+  types: ServiceType[]
+  onTeamChanged: (t: Team) => void
+  onTeamDeleted: (id: string) => void
+}) {
+  const [form, setForm] = useState(() => teamToSettingsForm(team))
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const [stypeDropOpen, setStypeDropOpen] = useState(false)
+
+  useEffect(() => {
+    setForm(teamToSettingsForm(team))
+    setSaveError('')
+  }, [team.id])
+
+  const isDirty = useMemo(() => {
+    const a = { ...teamToSettingsForm(team), service_type_ids: [...(team.service_type_ids ?? [])].sort() }
+    const b = { ...form, service_type_ids: [...form.service_type_ids].sort() }
+    return JSON.stringify(a) !== JSON.stringify(b)
+  }, [form, team])
+
+  function upd<K extends keyof ReturnType<typeof teamToSettingsForm>>(key: K, val: ReturnType<typeof teamToSettingsForm>[K]) {
+    setForm(f => ({ ...f, [key]: val }))
+  }
+
+  async function save() {
+    if (form.service_type_ids.length === 0) {
+      setSaveError('Selecciona al menos un tipo de servicio.')
+      return
+    }
+    setSaving(true)
+    setSaveError('')
+    try {
+      const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({} as any))
+        setSaveError(j.detail || 'Error al guardar. Intenta de nuevo.')
+        return
+      }
+      onTeamChanged(await r.json() as Team)
+    } finally { setSaving(false) }
+  }
+
+  const [relDropOpen, setRelDropOpen] = useState(false)
+
+  const card: React.CSSProperties = {
+    background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
+    padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 0,
+    boxShadow: '0 1px 2px rgb(15 23 42 / 0.04)',
+    transition: 'box-shadow 0.18s ease, border-color 0.18s ease',
+  }
+  const cTitle: React.CSSProperties = {
+    fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: '0.08em',
+    textTransform: 'uppercase', paddingBottom: 12, marginBottom: 4,
+    borderBottom: `1px solid ${C.border}`,
+    display: 'flex', alignItems: 'center', gap: 8,
+  }
+  const row: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: 12, padding: '11px 0', borderBottom: `1px solid ${C.border}`,
+  }
+  const lastRow: React.CSSProperties = { ...row, borderBottom: 'none', paddingBottom: 2 }
+  const lbl: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: C.text }
+  const hnt: React.CSSProperties = { fontSize: 11, color: C.muted, marginTop: 2, lineHeight: 1.45 }
+  const sel = (value: string, onChange: (v: string) => void, opts: { v: string; label: string }[]) => (
+    <select value={value} onChange={e => onChange(e.target.value)}
+      style={{ ...s.select, fontSize: 12, minWidth: 0, transition: 'border-color 0.15s ease, box-shadow 0.15s ease' }}>
+      {opts.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+    </select>
+  )
+  const toggle = (checked: boolean, onChange: (v: boolean) => void) => (
+    <button type="button" onClick={() => onChange(!checked)}
+      aria-pressed={checked}
+      style={{
+        width: 36, height: 20, borderRadius: 999,
+        background: checked ? C.primary : C.border,
+        border: 'none', cursor: 'pointer', position: 'relative',
+        transition: 'background 0.2s ease', padding: 0, flexShrink: 0,
+      }}>
+      <span style={{
+        position: 'absolute', top: 2, left: checked ? 18 : 2,
+        width: 16, height: 16, borderRadius: '50%', background: '#fff',
+        boxShadow: '0 1px 3px rgba(0,0,0,.18)',
+        transition: 'left 0.18s ease',
+      }} />
+    </button>
+  )
+
+  // FlagCard — selector tipo-card (icono + título + descripción) con ✓
+  const flagCard = (active: boolean, onToggle: () => void, icon: React.ReactNode, title: string, desc: string) => (
+    <div onClick={onToggle}
+      style={{
+        border: `1px solid ${active ? C.primary : C.border}`,
+        background: active ? 'rgba(79,70,229,0.05)' : C.surface,
+        borderRadius: 10, padding: 12, cursor: 'pointer',
+        display: 'flex', gap: 10, alignItems: 'flex-start',
+        transition: 'background 0.15s ease, border-color 0.15s ease, transform 0.1s ease',
+      }}>
+      <div style={{
+        width: 18, height: 18, borderRadius: 4,
+        border: `1px solid ${active ? C.primary : C.border}`,
+        background: active ? C.primary : 'transparent',
+        flexShrink: 0, marginTop: 2,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: 'white', transition: 'background 0.15s ease, border-color 0.15s ease',
+      }}>{active && Ico.check}</div>
+      <div style={{ flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+          <span style={{ display: 'flex', color: active ? C.primary : C.muted }}>{icon}</span>
+          <span style={{ fontWeight: 600, fontSize: 13, color: C.text }}>{title}</span>
+        </div>
+        <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.45 }}>{desc}</div>
+      </div>
+    </div>
+  )
+
+  const availableTypes = types.filter(st => !form.service_type_ids.includes(st.id))
+  const availableRelated = allTeams.filter(t => t.id !== team.id && !form.related_team_ids.includes(t.id))
+  const selectedRelated = allTeams.filter(t => form.related_team_ids.includes(t.id))
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+
+        {/* Card 1 — Tipo de equipo (flagCards) */}
+        <div style={card}>
+          <div style={cTitle}><span style={{ color: C.primary, display: 'flex' }}>{Ico.settings}</span>Tipo de equipo</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+            {flagCard(form.is_rehearsal, () => upd('is_rehearsal', !form.is_rehearsal), Ico.music,
+              'Equipo de ensayo', 'Acceso a canciones, partituras y archivos de media del servicio.')}
+            {flagCard(form.is_secure, () => upd('is_secure', !form.is_secure), Ico.shield,
+              'Equipo seguro', 'Sólo personas con verificación de antecedentes podrán ser asignadas.')}
+            {flagCard(form.is_split, () => upd('is_split', !form.is_split), Ico.split,
+              'Equipo dividido', 'Permite distintas personas por franja cuando hay varios servicios el mismo día.')}
+          </div>
+        </div>
+
+        {/* Card 2 — Valores predeterminados de programación */}
+        <div style={card}>
+          <div style={cTitle}><span style={{ color: C.primary, display: 'flex' }}>{Ico.calendar}</span>Valores predeterminados de programación</div>
+          <div style={row}>
+            <div><div style={lbl}>Estado predeterminado</div><div style={hnt}>Al crear un nuevo plan</div></div>
+            {sel(form.default_status, v => upd('default_status', v), [
+              { v: 'unconfirmed', label: 'No confirmado' },
+              { v: 'confirmed', label: 'Confirmado' },
+            ])}
+          </div>
+          <div style={row}>
+            <div><div style={lbl}>Notificar al preparar plan</div><div style={hnt}>Enviar alerta cuando el plan esté listo</div></div>
+            {toggle(form.notify_on_prepare, v => upd('notify_on_prepare', v))}
+          </div>
+          <div style={lastRow}>
+            <div><div style={lbl}>Respuestas van a</div><div style={hnt}>Destinatarios de las respuestas</div></div>
+            {sel(form.replies_to, v => upd('replies_to', v), [
+              { v: 'all_leaders', label: 'Todos los líderes' },
+              { v: 'service_type_leaders', label: 'Líderes del tipo' },
+              { v: 'no_one', label: 'Nadie' },
+            ])}
+          </div>
+        </div>
+
+        {/* Card 3 — Alertas de huecos */}
+        <div style={card}>
+          <div style={cTitle}><span style={{ color: C.warning, display: 'flex' }}>{Ico.alert}</span>Alertas de huecos en programación</div>
+          <div style={lastRow}>
+            <div><div style={lbl}>Activar alertas de huecos</div><div style={hnt}>Avisar al líder y a la persona cuando no se confirme antes de la fecha límite</div></div>
+            {toggle(form.gap_alerts_enabled, v => upd('gap_alerts_enabled', v))}
+          </div>
+        </div>
+
+        {/* Card 4 — Opciones */}
+        <div style={card}>
+          <div style={cTitle}><span style={{ color: C.primary, display: 'flex' }}>{Ico.sliders}</span>Opciones</div>
+          <div style={row}>
+            <div><div style={lbl}>Última fecha programada</div><div style={hnt}>Cómo se registra la fecha de servicio</div></div>
+            {sel(form.last_scheduled_date_rule, v => upd('last_scheduled_date_rule', v), [
+              { v: 'same_as_service_type', label: '= Tipo de servicio' },
+              { v: 'last_used_anywhere', label: 'Cualquier sitio' },
+              { v: 'last_used_in_team', label: 'En este equipo' },
+              { v: 'last_used_in_position', label: 'En esta posición' },
+            ])}
+          </div>
+          <div style={row}>
+            <div><div style={lbl}>Acceso de espectadores</div><div style={hnt}>Qué ve un miembro como espectador</div></div>
+            {sel(form.scheduled_viewer_access, v => upd('scheduled_viewer_access', v), [
+              { v: 'full_plan', label: 'Plan completo' },
+              { v: 'limited', label: 'Limitado' },
+              { v: 'none', label: 'Sin acceso' },
+            ])}
+          </div>
+          <div style={lastRow}>
+            <div><div style={lbl}>Hojas de inscripción auto.</div><div style={hnt}>Activar para nuevos planes</div></div>
+            {toggle(form.signup_sheets_auto_enable, v => upd('signup_sheets_auto_enable', v))}
+          </div>
+        </div>
+
+        {/* Card 5 — Tipos de servicio */}
+        <div style={card}>
+          <div style={cTitle}><span style={{ color: C.primary, display: 'flex' }}>{Ico.layers}</span>Tipos de servicio</div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 8, marginBottom: 8, lineHeight: 1.45 }}>
+            En qué tipos de servicio participa este equipo. <strong style={{ color: C.text }}>Mínimo 1 requerido.</strong>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {form.service_type_ids.length === 0
+              ? <span style={{ fontSize: 12, color: C.danger, fontStyle: 'italic' }}>⚠ Selecciona al menos uno</span>
+              : types.filter(st => form.service_type_ids.includes(st.id)).map(st => {
+                const isLast = form.service_type_ids.length === 1
+                return (
+                  <span key={st.id} style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                    background: C.primaryLight, border: `1px solid ${C.primary}40`,
+                    borderRadius: 999, padding: '4px 4px 4px 10px', fontSize: 12, color: C.primary, fontWeight: 500,
+                  }}>
+                    <span style={{ width: 7, height: 7, borderRadius: 2, background: st.color || C.primary }} />
+                    {st.name}
+                    <button disabled={isLast}
+                      title={isLast ? 'Mínimo 1 tipo de servicio requerido' : 'Quitar'}
+                      onClick={() => upd('service_type_ids', form.service_type_ids.filter(x => x !== st.id))}
+                      style={{
+                        background: isLast ? 'transparent' : 'rgba(79,70,229,0.15)', border: 'none',
+                        cursor: isLast ? 'not-allowed' : 'pointer',
+                        color: isLast ? `${C.primary}55` : C.primary, width: 16, height: 16, borderRadius: '50%',
+                        fontSize: 13, lineHeight: 1, padding: 0, display: 'flex',
+                        alignItems: 'center', justifyContent: 'center',
+                        transition: 'background 0.15s',
+                      }}>×</button>
+                  </span>
+                )
+              })
+            }
+          </div>
+          {availableTypes.length > 0 && (
+            <div style={{ position: 'relative', marginTop: 12 }}>
+              <button onClick={() => setStypeDropOpen(o => !o)}
+                style={{ ...s.btnGhost, padding: '5px 12px', fontSize: 12, gap: 4, transition: 'background 0.15s, border-color 0.15s' }}>
+                {Ico.plus} Añadir tipo
+              </button>
+              {stypeDropOpen && (
+                <div style={{
+                  position: 'absolute', top: '100%', left: 0, marginTop: 4,
+                  background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
+                  boxShadow: '0 4px 16px rgba(0,0,0,.12)', zIndex: 50, minWidth: 200, maxHeight: 240, overflowY: 'auto',
+                }}>
+                  {availableTypes.map(st => (
+                    <button key={st.id} onClick={() => { upd('service_type_ids', [...form.service_type_ids, st.id]); setStypeDropOpen(false) }}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left' as const,
+                        padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer',
+                        fontSize: 13, color: C.text, transition: 'background 0.12s',
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.background = C.soft)}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                      <span style={{ width: 8, height: 8, borderRadius: 2, background: st.color || C.primary }} />
+                      {st.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Card 6 — Equipos relacionados (funcional) */}
+        <div style={card}>
+          <div style={cTitle}><span style={{ color: C.primary, display: 'flex' }}>{Ico.users}</span>Equipos relacionados</div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 8, marginBottom: 8, lineHeight: 1.45 }}>
+            Cuando los miembros usen el filtro <strong style={{ color: C.text }}>Mis equipos</strong>, también se incluirán estos equipos.
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {selectedRelated.length === 0
+              ? <span style={{ fontSize: 12, color: C.muted, fontStyle: 'italic' }}>Sin equipos relacionados</span>
+              : selectedRelated.map(rt => (
+                <span key={rt.id} style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  background: C.soft, border: `1px solid ${C.border}`,
+                  borderRadius: 999, padding: '4px 4px 4px 10px', fontSize: 12, color: C.text, fontWeight: 500,
+                }}>
+                  <span style={{ width: 7, height: 7, borderRadius: 2, background: rt.color || C.primary }} />
+                  {rt.name}
+                  <button onClick={() => upd('related_team_ids', form.related_team_ids.filter(x => x !== rt.id))}
+                    style={{
+                      background: 'rgba(100,116,139,0.15)', border: 'none', cursor: 'pointer',
+                      color: C.muted, width: 16, height: 16, borderRadius: '50%',
+                      fontSize: 13, lineHeight: 1, padding: 0, display: 'flex',
+                      alignItems: 'center', justifyContent: 'center', transition: 'background 0.15s',
+                    }}>×</button>
+                </span>
+              ))
+            }
+          </div>
+          {availableRelated.length > 0 && (
+            <div style={{ position: 'relative', marginTop: 12 }}>
+              <button onClick={() => setRelDropOpen(o => !o)}
+                style={{ ...s.btnGhost, padding: '5px 12px', fontSize: 12, gap: 4, transition: 'background 0.15s, border-color 0.15s' }}>
+                {Ico.plus} Añadir equipo
+              </button>
+              {relDropOpen && (
+                <div style={{
+                  position: 'absolute', top: '100%', left: 0, marginTop: 4,
+                  background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
+                  boxShadow: '0 4px 16px rgba(0,0,0,.12)', zIndex: 50, minWidth: 220, maxHeight: 240, overflowY: 'auto',
+                }}>
+                  {availableRelated.map(rt => (
+                    <button key={rt.id} onClick={() => { upd('related_team_ids', [...form.related_team_ids, rt.id]); setRelDropOpen(false) }}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left' as const,
+                        padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer',
+                        fontSize: 13, color: C.text, transition: 'background 0.12s',
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.background = C.soft)}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                      <span style={{ width: 8, height: 8, borderRadius: 2, background: rt.color || C.primary }} />
+                      {rt.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Card 7 — Reagendado de rechazos (full width) */}
+        <div style={{ ...card, gridColumn: '1 / -1' }}>
+          <div style={cTitle}><span style={{ color: C.primary, display: 'flex' }}>{Ico.recycle}</span>Reagendado de rechazos</div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 8, marginBottom: 12, lineHeight: 1.45 }}>
+            Cuando alguien rechaza una solicitud, ¿cómo debería ser reagendado?
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 32px' }}>
+            {([
+              { v: 'none', label: 'No reagendar', hint: 'Los rechazos no generan ninguna acción' },
+              { v: 'manual', label: 'Reagendar manualmente', hint: 'Se crea una posición necesaria para asignar' },
+              { v: 'volunteer', label: 'Reemplazo voluntario', hint: 'La persona programada elige su sustituto' },
+              { v: 'auto', label: 'Auto-agenda', hint: 'El siguiente candidato recibe solicitud automática' },
+              { v: 'signup_sheet', label: 'Hoja de inscripción', hint: 'La posición abre en la hoja del equipo' },
+            ]).map(({ v, label, hint }) => {
+              const active = form.reschedule_on_decline === v
+              return (
+                <label key={v}
+                  onClick={() => upd('reschedule_on_decline', v)}
+                  style={{
+                    display: 'flex', gap: 10, cursor: 'pointer', alignItems: 'flex-start',
+                    padding: 10, borderRadius: 8,
+                    border: `1px solid ${active ? C.primary : C.border}`,
+                    background: active ? 'rgba(79,70,229,0.05)' : C.surface,
+                    transition: 'background 0.15s, border-color 0.15s',
+                  }}>
+                  <div style={{
+                    width: 16, height: 16, borderRadius: '50%', marginTop: 2,
+                    border: `2px solid ${active ? C.primary : C.border}`,
+                    background: 'transparent', flexShrink: 0,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'border-color 0.15s',
+                  }}>
+                    {active && <span style={{ width: 7, height: 7, borderRadius: '50%', background: C.primary }} />}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{label}</div>
+                    <div style={{ fontSize: 11, color: C.muted, marginTop: 2, lineHeight: 1.4 }}>{hint}</div>
+                  </div>
+                </label>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Acciones */}
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        paddingTop: 14, marginTop: 4, borderTop: `1px solid ${C.border}`,
+      }}>
+        <button onClick={async () => {
+            if (!confirm(`¿Eliminar el equipo "${team.name}"? Esta acción es irreversible.`)) return
+            const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}`, { method: 'DELETE' })
+            if (r.ok) onTeamDeleted(team.id)
+          }}
+          style={{
+            ...s.btnGhost, color: C.danger, borderColor: 'rgba(239,68,68,.3)', gap: 6,
+            transition: 'background 0.15s, border-color 0.15s',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = C.dangerLight)}
+          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+          {Ico.trash} Eliminar equipo
+        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {saveError && <span style={{ fontSize: 12, color: C.danger }}>{saveError}</span>}
+          {isDirty && !saving && !saveError && <span style={{ fontSize: 11, color: C.warning, fontWeight: 600 }}>· Cambios sin guardar</span>}
+          {(() => {
+            const noTypes = form.service_type_ids.length === 0
+            const disabled = !isDirty || saving || noTypes
+            return (
+              <button onClick={save} disabled={disabled}
+                title={noTypes ? 'Selecciona al menos un tipo de servicio' : undefined}
+                style={{
+                  ...s.btnPrimary, gap: 6,
+                  opacity: disabled ? 0.5 : 1,
+                  cursor: disabled ? 'not-allowed' : 'pointer',
+                  transition: 'background 0.15s, opacity 0.15s',
+                }}>
+                {saving ? <>Guardando…</> : <>{Ico.check} Guardar cambios</>}
+              </button>
+            )
+          })()}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function TeamDetailView({ slug, team, allTeams, orgMembers, types, currentMemberId, onBack, onTeamChanged, onTeamDeleted }: {
+  slug: string
+  team: Team
+  allTeams: Team[]
+  orgMembers: OrgMemberLite[]
+  types: ServiceType[]
+  currentMemberId: string | null
+  onBack: () => void
+  onTeamChanged: (t: Team) => void
+  onTeamDeleted: (id: string) => void
+}) {
+  const [tab, setTab] = useState<'settings' | 'members' | 'automations'>('members')
+  const [detail, setDetail] = useState<TeamDetailPayload | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [selectedView, setSelectedView] = useState<{ kind: 'all' | 'leaders' | 'position'; positionId?: string }>({ kind: 'all' })
+  const [addPositionOpen, setAddPositionOpen] = useState(false)
+  const [addMembersFor, setAddMembersFor] = useState<TeamPositionInfo | null>(null)
+  const [emailRecipients, setEmailRecipients] = useState<TeamPerson[] | null>(null)
+  const [editingTeamOpen, setEditingTeamOpen] = useState(false)
+  // Members already in Services (used to badge "Nuevo en Servicios" in the picker)
+  const [serviceMemberIds, setServiceMemberIds] = useState<Set<string>>(new Set())
+  // Queue of newly-enrolled people waiting for the welcome compose modal
+  const [welcomeQueue, setWelcomeQueue] = useState<ServicePerson[]>([])
+
+  const reload = useCallback(async () => {
+    setLoading(true)
+    try {
+      const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}/detail`)
+      if (r.ok) setDetail(await r.json())
+    } finally { setLoading(false) }
+  }, [slug, team.id])
+
+  const reloadServiceMembers = useCallback(async () => {
+    const r = await api(`/api/v1/tenant/${slug}/services/people`)
+    if (r.ok) {
+      const ppl: { member_id: string }[] = await r.json()
+      setServiceMemberIds(new Set(ppl.map(p => p.member_id)))
+    }
+  }, [slug])
+
+  useEffect(() => { reload(); reloadServiceMembers() }, [reload, reloadServiceMembers])
+
+  const visibleList = useMemo(() => {
+    if (!detail) return { title: 'Cargando…', items: [] as TeamPerson[], canDelete: false as boolean, deletePositionId: undefined as string | undefined }
+    if (selectedView.kind === 'all')
+      return { title: 'Todos los miembros del equipo', items: detail.all_members, canDelete: false, deletePositionId: undefined }
+    if (selectedView.kind === 'leaders')
+      return { title: 'Líderes del equipo', items: detail.leaders, canDelete: false, deletePositionId: undefined }
+    const p = detail.positions.find(x => x.id === selectedView.positionId)
+    if (!p) return { title: 'Posición', items: [], canDelete: true, deletePositionId: selectedView.positionId }
+    return { title: p.name, items: p.members, canDelete: true, deletePositionId: p.id }
+  }, [detail, selectedView])
+
+  const positionForAdding = useMemo(
+    () => detail && selectedView.kind === 'position' ? detail.positions.find(x => x.id === selectedView.positionId) || null : null,
+    [detail, selectedView]
+  )
+
+  async function deletePosition(posId: string) {
+    if (!confirm('¿Eliminar esta posición? Se quitarán todos los miembros asignados a ella.')) return
+    const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}/positions/${posId}`, { method: 'DELETE' })
+    if (r.ok) {
+      setSelectedView({ kind: 'all' })
+      reload()
+    }
+  }
+
+  async function removeMemberFromPosition(posId: string, memberId: string) {
+    if (!confirm('¿Quitar esta persona de la posición?')) return
+    const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}/positions/${posId}/members/${memberId}`, { method: 'DELETE' })
+    if (r.ok) reload()
+  }
+
+  return (
+    <main style={s.main}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
+        <div>
+          <button onClick={onBack} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', padding: '0 0 6px' }}>‹ EQUIPOS</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 12, height: 12, borderRadius: 3, background: team.color || C.primary, flexShrink: 0 }} />
+            <h2 style={s.mainTitle}>{team.name}</h2>
+          </div>
+          <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+            {team.is_rehearsal && <span style={{ ...s.pill, background: '#DBEAFE', color: '#1D4ED8', fontSize: 10 }}>Ensayo</span>}
+            {team.is_secure && <span style={{ ...s.pill, background: '#FEF3C7', color: '#92400E', fontSize: 10 }}>Seguro</span>}
+            {team.is_split && <span style={{ ...s.pill, background: '#F3E8FF', color: '#6B21A8', fontSize: 10 }}>Dividido</span>}
+            {types.filter(t => team.service_type_ids?.includes(t.id)).map(st => (
+              <span key={st.id} style={{ ...s.pill, background: C.soft, color: C.text, fontSize: 10 }}>{st.name}</span>
+            ))}
+          </div>
+        </div>
+        <button style={{ ...s.btnGhost, marginTop: 4 }} onClick={() => setEditingTeamOpen(true)}>Editar nombre</button>
+      </div>
+
+      <div style={{ display: 'flex', gap: 0, borderBottom: `1px solid ${C.border}`, marginBottom: 18 }}>
+        {(['members', 'settings', 'automations'] as const).map(k => {
+          const active = k === tab
+          const label = k === 'settings' ? 'Configuración' : k === 'members' ? 'Miembros' : 'Automatizaciones'
+          return (
+            <button key={k} onClick={() => setTab(k)}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                padding: '10px 16px', fontSize: 13, fontWeight: 600,
+                color: active ? C.text : C.muted,
+                borderBottom: `2px solid ${active ? C.primary : 'transparent'}`,
+                marginBottom: -1,
+              }}>{label}</button>
+          )
+        })}
+      </div>
+
+      {tab === 'settings' && (
+        <TeamSettingsTab slug={slug} team={team} allTeams={allTeams} types={types} onTeamChanged={onTeamChanged} onTeamDeleted={onTeamDeleted} />
+      )}
+
+      {tab === 'automations' && (
+        <div style={{ background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10, padding: '40px 16px', textAlign: 'center', color: C.muted, fontSize: 13 }}>
+          Próximamente — automatizaciones del equipo (recordatorios, asignaciones automáticas, etc.).
+        </div>
+      )}
+
+      {tab === 'members' && (
+        <div style={{ display: 'flex', gap: 18, alignItems: 'flex-start' }}>
+          <div style={{ width: 240, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 8, flexShrink: 0 }}>
+            <SidebarItem label="Todos los miembros" count={detail?.all_members.length || 0}
+              active={selectedView.kind === 'all'} onClick={() => setSelectedView({ kind: 'all' })} />
+            <SidebarItem label="Líderes" count={detail?.leaders.length || 0}
+              active={selectedView.kind === 'leaders'} onClick={() => setSelectedView({ kind: 'leaders' })} />
+            <div style={{ fontSize: 10, fontWeight: 700, color: C.muted, letterSpacing: '0.08em', padding: '14px 10px 6px' }}>POSICIONES</div>
+            {(detail?.positions || []).map(p => (
+              <SidebarItem key={p.id} label={p.name} count={p.member_count}
+                active={selectedView.kind === 'position' && selectedView.positionId === p.id}
+                onClick={() => setSelectedView({ kind: 'position', positionId: p.id })} />
+            ))}
+            <button onClick={() => setAddPositionOpen(true)}
+              style={{ width: '100%', marginTop: 6, padding: '8px 10px', borderRadius: 6,
+                background: 'transparent', border: `1px dashed ${C.border}`, color: C.muted,
+                fontSize: 12, cursor: 'pointer', textAlign: 'left' as const }}>
+              + Añadir posición
+            </button>
+          </div>
+
+          <div style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', borderBottom: `1px solid ${C.border}` }}>
+              <h3 style={{ margin: 0, fontSize: 15, color: C.text }}>{visibleList.title}</h3>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <IconBtn title="Enviar correo" onClick={() => setEmailRecipients(visibleList.items)} disabled={visibleList.items.length === 0}>
+                  <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2}><path d="M4 6h16v12H4z" /><path d="M4 6l8 7 8-7" /></svg>
+                </IconBtn>
+                <IconBtn title="Imprimir / PDF" onClick={() => printTeamRoster(team, visibleList.title, visibleList.items)} disabled={visibleList.items.length === 0}>
+                  <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2}><path d="M6 9V3h12v6" /><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2" /><path d="M6 14h12v8H6z" /></svg>
+                </IconBtn>
+                {visibleList.canDelete && visibleList.deletePositionId && (
+                  <IconBtn title="Eliminar posición" danger onClick={() => deletePosition(visibleList.deletePositionId!)}>
+                    <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2}><path d="M3 6h18" /><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2" /><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" /></svg>
+                  </IconBtn>
+                )}
+              </div>
+            </div>
+
+            {loading ? (
+              <div style={{ padding: 40, textAlign: 'center', color: C.muted }}>Cargando…</div>
+            ) : (
+              <>
+                {selectedView.kind === 'position' && positionForAdding && (
+                  <div style={{ padding: '10px 18px', borderBottom: `1px solid ${C.border}`, background: C.bg }}>
+                    <button onClick={() => setAddMembersFor(positionForAdding)} style={{ ...s.btnGhost, padding: '6px 12px', fontSize: 12 }}>+ Añadir persona</button>
+                  </div>
+                )}
+                {visibleList.items.length === 0 ? (
+                  <div style={{ padding: '40px 16px', textAlign: 'center', color: C.muted, fontSize: 13 }}>
+                    {selectedView.kind === 'position'
+                      ? 'Aún no hay nadie en esta posición. Usa "Añadir persona" arriba.'
+                      : selectedView.kind === 'leaders'
+                        ? 'Aún no hay líderes. Edita el equipo en la pestaña Configuración para añadirlos.'
+                        : 'Aún no hay miembros. Crea una posición y añade personas.'}
+                  </div>
+                ) : (
+                  <table style={s.planTable}>
+                    <thead>
+                      <tr>
+                        <th style={s.planTh}>Nombre</th>
+                        <th style={s.planTh}>Apellido</th>
+                        <th style={s.planTh}>Email</th>
+                        <th style={s.planTh}>Preferencias</th>
+                        {selectedView.kind === 'position' && <th style={s.planTh}></th>}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleList.items.map(p => {
+                        const parts = (p.full_name || '').split(' ')
+                        const first = parts[0] || ''
+                        const last = parts.slice(1).join(' ')
+                        const prefMonth = p.preferences.max_per_month
+                        const prefDay = p.preferences.max_per_day
+                        const prefStr = (prefMonth == null && prefDay == null)
+                          ? 'Sin límite'
+                          : `${prefMonth != null ? prefMonth + '/mes' : '—'} · ${prefDay != null ? prefDay + '/día' : '—'}`
+                        return (
+                          <tr key={p.member_id}>
+                            <td style={s.planTd}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <div style={{ width: 26, height: 26, borderRadius: 999, background: p.avatar ? `url(${p.avatar}) center/cover` : C.soft, color: C.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+                                  {!p.avatar && (first[0]?.toUpperCase() || p.email[0]?.toUpperCase())}
+                                </div>
+                                <span style={{ fontWeight: 500, color: C.text }}>{first || '—'}</span>
+                              </div>
+                            </td>
+                            <td style={{ ...s.planTd, color: C.text, fontSize: 13 }}>{last || '—'}</td>
+                            <td style={{ ...s.planTd, color: C.muted, fontSize: 12 }}>{p.email}</td>
+                            <td style={{ ...s.planTd, color: C.muted, fontSize: 12 }}>{prefStr}</td>
+                            {selectedView.kind === 'position' && (
+                              <td style={{ ...s.planTd, textAlign: 'right' as const }}>
+                                <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, color: C.danger, borderColor: 'rgba(239,68,68,.3)' }}
+                                  onClick={() => removeMemberFromPosition(selectedView.positionId!, p.member_id)}>Quitar</button>
+                              </td>
+                            )}
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {addPositionOpen && (
+        <AddPositionModal slug={slug} teamId={team.id}
+          existingNames={(detail?.positions || []).map(p => p.name)}
+          onCreated={p => { reload(); setSelectedView({ kind: 'position', positionId: p.id }) }}
+          onClose={() => setAddPositionOpen(false)} />
+      )}
+
+      {addMembersFor && (
+        <AddPersonsToPositionModal slug={slug} teamId={team.id} position={addMembersFor}
+          orgMembers={orgMembers}
+          serviceMemberIds={serviceMemberIds}
+          excludedIds={new Set(addMembersFor.members.map(m => m.member_id))}
+          onDone={(newlyEnrolled) => {
+            reload()
+            reloadServiceMembers()
+            setAddMembersFor(null)
+            if (newlyEnrolled.length > 0) {
+              setWelcomeQueue(prev => [...prev, ...newlyEnrolled])
+            }
+          }}
+          onClose={() => setAddMembersFor(null)} />
+      )}
+
+      {welcomeQueue.length > 0 && (
+        <ComposeEmailModal
+          slug={slug}
+          defaultRecipient={welcomeQueue[0]}
+          autoApplyKind="welcome"
+          onClose={() => setWelcomeQueue(q => q.slice(1))}
+          onSent={() => setWelcomeQueue(q => q.slice(1))} />
+      )}
+
+      {emailRecipients && (
+        <TeamBulkEmailModal slug={slug} recipients={emailRecipients}
+          onClose={() => setEmailRecipients(null)}
+          onSent={() => setEmailRecipients(null)} />
+      )}
+
+      {editingTeamOpen && (
+        <TeamFormModal slug={slug} initial={team}
+          orgMembers={orgMembers} types={types} currentMemberId={currentMemberId}
+          onSaved={t => { onTeamChanged(t); setEditingTeamOpen(false); reload() }}
+          onClose={() => setEditingTeamOpen(false)} />
       )}
     </main>
   )
