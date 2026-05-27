@@ -1,5440 +1,1723 @@
-/**
- * Servicios module — Planning Center-style.
- *
- * Tabs: 'mi-planificacion' | 'servicios' | 'canciones' | 'media' | 'personas'.
- * 'servicios' tab is fully implemented:
- *   - ListView with one card per ServiceType (recurrence, times, teams, upcoming)
- *   - CreateWizard (3 steps: name+recurrence → times → teams)
- *   - MiniCalendar with day-dots from projected occurrences
- *   - MasterCalendarModal (month grid + occurrence list)
- * 'personas' tab implements Teams CRUD + add/remove team memberships.
- */
-import React, { useEffect, useMemo, useState, useCallback } from 'react'
-import ReactDOM from 'react-dom'
-import { useParams } from 'react-router-dom'
+// Servicios — 1:1 port of /mnt/Worsyn prototype (shell + screens-a/b/c).
+// All visual structure, class names, and content reproduced faithfully.
+// Backend wiring: real /api/v1/tenant/{slug}/... where endpoints exist; mock seed
+// data from /mnt/Worsyn/src/data.jsx where backend stubs remain (Canciones, Media,
+// PlanDetail.items, pendingRequests).
 
-export type ServiciosTab = 'mi-planificacion' | 'servicios' | 'canciones' | 'media' | 'personas'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import ServiciosLegacy from './ServiciosLegacy'
+import { I } from '../components/IconsV2'
+import '../styles/tenant.css'
 
-const C = {
-  bg: '#F8FAFC', surface: '#FFFFFF', border: '#E2E8F0', soft: '#F1F5F9',
-  text: '#0F172A', muted: '#64748B', light: '#94A3B8',
-  primary: '#4F46E5', primaryLight: '#EEF2FF', primaryMid: '#6366F1',
-  success: '#10B981', successLight: '#ECFDF5',
-  danger: '#EF4444', dangerLight: '#FEF2F2',
-  warning: '#F59E0B',
-}
+type ServiciosTab = 'mi-planificacion' | 'servicios' | 'canciones' | 'media' | 'personas' | 'legacy'
 
-const s: Record<string, React.CSSProperties> = {
-  main:        { flex: 1, overflowY: 'auto', padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 14 },
-  mainTitle:   { fontSize: 17, fontWeight: 700, color: C.text, margin: 0 },
-  btnPrimary:  { display: 'inline-flex', alignItems: 'center', gap: 6, background: C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
-  btnGhost:    { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'transparent', color: C.muted, border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 14px', fontSize: 13, fontWeight: 500, cursor: 'pointer' },
-  btnDanger:   { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'transparent', color: C.danger, border: '1px solid rgba(239,68,68,.3)', borderRadius: 8, padding: '8px 14px', fontSize: 13, fontWeight: 500, cursor: 'pointer' },
-  iconBtn:     { background: 'none', border: 'none', cursor: 'pointer', color: C.muted, borderRadius: 6, padding: '4px 8px', fontSize: 12, fontWeight: 600 },
-  layout:      { display: 'flex', flex: 1, overflow: 'hidden' },
-  sidebar:     { width: 240, background: C.surface, borderRight: `1px solid ${C.border}`, flexShrink: 0, overflowY: 'auto', padding: '16px 14px', display: 'flex', flexDirection: 'column', gap: 18 },
-  typeCard:    { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10 },
-  typeHeader:  { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: C.soft, cursor: 'pointer' },
-  typeName:    { fontSize: 14, fontWeight: 600, color: C.text },
-  planTable:   { width: '100%', borderCollapse: 'collapse' as const },
-  planTh:      { fontSize: 11, fontWeight: 700, color: C.light, textTransform: 'uppercase' as const, letterSpacing: '0.07em', padding: '8px 16px', borderBottom: `1px solid ${C.border}`, textAlign: 'left' as const },
-  planTd:      { fontSize: 13, color: C.text, padding: '9px 16px', borderBottom: `1px solid ${C.border}` },
-  overlay:     { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 },
-  modal:       { background: C.surface, borderRadius: 14, padding: '24px 28px 20px', width: 560, maxHeight: '85vh', display: 'flex', flexDirection: 'column', gap: 16, boxShadow: '0 8px 40px rgba(0,0,0,.18)', overflow: 'hidden' },
-  modalTitle:  { fontSize: 18, fontWeight: 700, color: C.text, margin: 0 },
-  label:       { fontSize: 13, fontWeight: 600, color: C.text, display: 'flex', flexDirection: 'column', gap: 6 },
-  input:       { border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 12px', fontSize: 14, color: C.text, outline: 'none', width: '100%', boxSizing: 'border-box' as const, background: '#fff' },
-  select:      { border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 12px', fontSize: 14, color: C.text, outline: 'none', background: '#fff', cursor: 'pointer' },
-  modalActions:{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 6 },
-  errorText:   { fontSize: 12, color: C.danger },
-  pill:        { fontSize: 11, fontWeight: 600, borderRadius: 999, padding: '3px 10px', display: 'inline-block' },
-  stepDot:     { width: 24, height: 24, borderRadius: 999, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700 },
-}
-
-// ── Types ────────────────────────────────────────────────────────────────────
-type Recurrence = 'none' | 'random' | 'daily' | 'weekly' | 'weekdays' | 'biweekly' | 'monthly'
-
-interface ServiceTime {
-  id?: string
-  starts_on: string   // YYYY-MM-DD
-  start_time: string  // HH:MM
-  end_time: string    // HH:MM
-  weekday?: number
-  sort_order?: number
-}
-interface ServiceType {
-  id: string
-  name: string
-  color: string | null
-  sort_order: number
-  recurrence: Recurrence
-  description: string | null
-  times: ServiceTime[]
-  team_ids: string[]
-}
-interface ServicePlan { id: string; title: string; status: string; scheduled_at: string | null; service_type_id: string | null }
-interface Team {
-  id: string
-  name: string
-  color: string | null
-  description: string | null
-  member_count: number
-  is_rehearsal?: boolean
-  is_secure?: boolean
-  is_split?: boolean
-  leader_member_ids?: string[]
-  service_type_ids?: string[]
-  related_team_ids?: string[]
-  // Settings fields
-  default_status?: string
-  notify_on_prepare?: boolean
-  replies_to?: string
-  gap_alerts_enabled?: boolean
-  last_scheduled_date_rule?: string
-  scheduled_viewer_access?: string
-  signup_sheets_auto_enable?: boolean
-  reschedule_on_decline?: string
-}
-interface Occurrence {
-  service_type_id: string
-  service_type_name: string
-  color: string | null
-  date: string        // YYYY-MM-DD
-  start_time: string  // HH:MM
-  end_time: string    // HH:MM
-}
-
-const RECUR_OPTIONS: { v: Recurrence; label: string; hint: string }[] = [
-  { v: 'weekly',   label: 'Semanal',         hint: 'Cada semana en el mismo día' },
-  { v: 'biweekly', label: 'Cada 2 semanas',  hint: 'Quincenal' },
-  { v: 'monthly',  label: 'Mensual',         hint: 'Una vez al mes' },
-  { v: 'weekdays', label: 'Días laborables', hint: 'Lunes a viernes' },
-  { v: 'daily',    label: 'Diario',          hint: 'Todos los días' },
-  { v: 'random',   label: 'Aleatorio',       hint: 'Fecha única, sin repetición' },
-  { v: 'none',     label: 'Sin repetición',  hint: 'Un solo servicio' },
-]
-
-const WEEKDAYS = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo']
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-function nextSundayISO(): string {
-  const d = new Date()
-  const dow = d.getDay()           // 0=Sun … 6=Sat
-  const add = dow === 0 ? 7 : 7 - dow
-  d.setDate(d.getDate() + add)
-  return d.toISOString().slice(0, 10)
-}
-function fmtDate(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso + (iso.length === 10 ? 'T00:00:00' : ''))
-  return d.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })
-}
-function fmtDateShort(iso: string): string {
-  const d = new Date(iso + 'T00:00:00')
-  return d.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })
-}
-function recurLabel(r: Recurrence): string {
-  return RECUR_OPTIONS.find(o => o.v === r)?.label ?? r
-}
-function typeColor(t: ServiceType): string { return t.color || C.primary }
-
-async function api(path: string, init?: RequestInit): Promise<Response> {
+// ── api helper ──────────────────────────────────────────────────────────────
+function api(path: string, init?: RequestInit): Promise<Response> {
   return fetch(path, { credentials: 'include', ...init })
 }
 
+// ── appearance + sidebar persistence ────────────────────────────────────────
+type Appearance = 'clean-light' | 'clean-dark' | 'cyber'
+function appearanceAttrs(a: Appearance) {
+  if (a === 'cyber') return { theme: 'dark' as const, style: 'cyber' as const }
+  if (a === 'clean-dark') return { theme: 'dark' as const, style: 'clean' as const }
+  return { theme: 'light' as const, style: 'clean' as const }
+}
+function useAppearance(): [Appearance, (a: Appearance) => void] {
+  const [a, setA] = useState<Appearance>(() => {
+    if (typeof window === 'undefined') return 'clean-light'
+    const v = window.localStorage.getItem('worsyn-tenant-appearance')
+    return v === 'clean-dark' || v === 'cyber' || v === 'clean-light' ? (v as Appearance) : 'clean-light'
+  })
+  return [a, (n) => { setA(n); try { window.localStorage.setItem('worsyn-tenant-appearance', n) } catch {} }]
+}
+function useSidebarMode(): ['full' | 'icons' | 'hidden', () => void] {
+  const [m, setM] = useState<'full'|'icons'|'hidden'>(() => {
+    if (typeof window === 'undefined') return 'full'
+    const v = window.localStorage.getItem('worsyn-tenant-sidebar')
+    return (v === 'icons' || v === 'hidden' || v === 'full') ? v as any : 'full'
+  })
+  const cycle = () => {
+    const next = m === 'full' ? 'icons' : m === 'icons' ? 'hidden' : 'full'
+    setM(next); try { window.localStorage.setItem('worsyn-tenant-sidebar', next) } catch {}
+  }
+  return [m, cycle]
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// CreateTypeWizard — multi-step modal
+// Mock seed — verbatim port of /mnt/Worsyn/src/data.jsx
+// Replaced inline with real data where the endpoint is wired.
 // ─────────────────────────────────────────────────────────────────────────────
-function CreateTypeWizard({ slug, teams, onCreated, onClose }: {
-  slug: string
-  teams: Team[]
-  onCreated: (t: ServiceType) => void
-  onClose: () => void
+const SEED = {
+  serviceTypes: [
+    { id: 'st1', name: 'Servicio Dominical', color: '#0A84FF', rec: 'Semanal · Domingos',
+      times: ['10:00 – 11:30', '12:30 – 14:00'],
+      instances: [
+        { id: 'sd1', date: '31 May', dow: 'Dom', time: '10:00', status: 'Publicado',  teamConfirmed: 9, teamTotal: 13, leader: 'Lucía H.' },
+        { id: 'sd2', date: '07 Jun', dow: 'Dom', time: '10:00', status: 'Borrador',   teamConfirmed: 4, teamTotal: 12, leader: 'Diego R.' },
+        { id: 'sd3', date: '14 Jun', dow: 'Dom', time: '10:00', status: 'Sin equipo', teamConfirmed: 0, teamTotal: 0,  leader: 'Por asignar' },
+      ] },
+    { id: 'st2', name: 'Culto de Oración', color: '#AF52DE', rec: 'Semanal · Miércoles',
+      times: ['19:30 – 21:00'],
+      instances: [
+        { id: 'co1', date: '03 Jun', dow: 'Mié', time: '19:30', status: 'Publicado', teamConfirmed: 5, teamTotal: 6, leader: 'Marta S.' },
+        { id: 'co2', date: '10 Jun', dow: 'Mié', time: '19:30', status: 'Publicado', teamConfirmed: 3, teamTotal: 6, leader: 'Marta S.' },
+        { id: 'co3', date: '17 Jun', dow: 'Mié', time: '19:30', status: 'Borrador',  teamConfirmed: 2, teamTotal: 6, leader: 'Pendiente' },
+      ] },
+    { id: 'st3', name: 'Jóvenes', color: '#FF9500', rec: 'Semanal · Viernes',
+      times: ['20:00 – 22:00'],
+      instances: [
+        { id: 'jv1', date: '05 Jun', dow: 'Vie', time: '20:00', status: 'Reclutando', teamConfirmed: 4, teamTotal: 9, leader: 'Diego R.' },
+        { id: 'jv2', date: '12 Jun', dow: 'Vie', time: '20:00', status: 'Borrador',   teamConfirmed: 1, teamTotal: 9, leader: 'Diego R.' },
+        { id: 'jv3', date: '19 Jun', dow: 'Vie', time: '20:00', status: 'Sin equipo', teamConfirmed: 0, teamTotal: 0, leader: 'Por asignar' },
+      ] },
+    { id: 'st4', name: 'Servicio Especial', color: '#FF2D55', rec: 'Sin repetición',
+      times: ['18:00 – 20:30'],
+      instances: [
+        { id: 'sp1', date: '21 Jun', dow: 'Sáb', time: '18:00', status: 'Reclutando', teamConfirmed: 7, teamTotal: 18, leader: 'Pastor Andrés', special: 'Noche de adoración' },
+      ] },
+  ],
+  pendingRequests: [
+    { id: 'req1', from: { name: 'Diego Ramírez', initials: 'DR', tone: 'orange', color: '#FF9500' },
+      svc: 'Jóvenes', tone: 'orange', date: 'Vie 5 Jun · 20:00', role: 'Coros', team: 'Alabanza Joven',
+      deadline: 'Confirma antes del miércoles 3',
+      message: '¡Hola Lucía! ¿Estarás disponible para hacer coros el viernes? Estamos preparando un set energético — sería genial tenerte.',
+      songs: ['Reckless Love (Esp)', 'Aleluya, gloria a Dios', 'Inunda este lugar', 'Yo te exalto'] },
+    { id: 'req2', from: { name: 'Marta Soto', initials: 'MS', tone: 'purple', color: '#AF52DE' },
+      svc: 'Culto de Oración', tone: 'purple', date: 'Mié 10 Jun · 19:30', role: 'Piano + voz', team: 'Música · Equipo B',
+      deadline: 'Confirma antes del domingo 7',
+      message: 'Necesitamos un piano que también pueda guiar coros suaves en el bloque de espontáneo. ¿Te animas?',
+      songs: ['Inunda este lugar', 'Renuévame'] },
+  ],
+  upcoming: [
+    { date: 'Domingo 31',  day: 'Mañana',     when: '10:00', svc: 'Servicio Dominical', role: 'Voz líder', team: 'Alabanza · Equipo A', status: 'Confirmado', color: '#0A84FF', tone: 'blue' },
+    { date: 'Miércoles 3', day: 'En 4 días',  when: '19:30', svc: 'Culto de Oración',   role: 'Piano',     team: 'Música · Equipo B',   status: 'Pendiente',  color: '#AF52DE', tone: 'purple' },
+    { date: 'Viernes 5',   day: 'En 6 días',  when: '20:00', svc: 'Jóvenes',            role: 'Coros',     team: 'Alabanza Joven',      status: 'Pendiente',  color: '#FF9500', tone: 'orange' },
+    { date: 'Domingo 7',   day: 'En 1 semana',when: '10:00', svc: 'Servicio Dominical', role: 'Voz líder', team: 'Alabanza · Equipo A', status: 'Confirmado', color: '#0A84FF', tone: 'blue' },
+  ],
+  songs: [
+    { id: 's1', title: 'Maravilloso es',          author: 'Marcos Witt',          key: 'D', bpm: 78,  tags: ['Adoración'],   ccli: '7102351', updated: 'hace 2 días', plays: 124 },
+    { id: 's2', title: 'Eres todopoderoso',       author: 'Generación 12',        key: 'G', bpm: 92,  tags: ['Adoración'],   ccli: '5483217', updated: 'hace 5 días', plays: 218 },
+    { id: 's3', title: 'Reckless Love (Esp)',     author: 'Bethel Music',         key: 'C', bpm: 70,  tags: ['Adoración'],   ccli: '7089641', updated: 'hace 1 sem',  plays: 91  },
+    { id: 's4', title: 'Aleluya, gloria a Dios',  author: 'Hillsong',             key: 'A', bpm: 128, tags: ['Celebración'], ccli: '6019234', updated: 'hace 1 sem',  plays: 164 },
+    { id: 's5', title: 'Inunda este lugar',       author: "Christine D'Clario",   key: 'B', bpm: 64,  tags: ['Espontáneo'],  ccli: '7012458', updated: 'hace 2 sem',  plays: 87  },
+    { id: 's6', title: 'Renuévame',               author: 'Marcos Witt',          key: 'E', bpm: 76,  tags: ['Adoración'],   ccli: '4129877', updated: 'hace 3 sem',  plays: 312 },
+    { id: 's7', title: 'Yo te exalto',            author: 'Miel San Marcos',      key: 'F', bpm: 134, tags: ['Celebración'], ccli: '5731291', updated: 'hace 1 mes',  plays: 145 },
+    { id: 's8', title: 'Cuán grande es Él',       author: 'Tradicional',          key: 'G', bpm: 70,  tags: ['Himno'],       ccli: '15348',   updated: 'hace 1 mes',  plays: 402 },
+  ],
+  media: [
+    { id: 'm1', name: 'Bumper Dominical Q1.mp4',     kind: 'video' as const, size: '124 MB', when: 'hace 3 días', tag: 'Bumper' },
+    { id: 'm2', name: 'Anuncio Conferencia.png',     kind: 'image' as const, size: '3.2 MB', when: 'hace 5 días', tag: 'Anuncios' },
+    { id: 'm3', name: 'Fondo Adoración 1.jpg',       kind: 'image' as const, size: '4.8 MB', when: 'hace 1 sem',  tag: 'Fondos' },
+    { id: 'm4', name: 'Sermón 23 — Audio.mp3',       kind: 'audio' as const, size: '38 MB',  when: 'hace 1 sem',  tag: 'Sermones' },
+    { id: 'm5', name: 'Letra Cuán grande es Él.pptx',kind: 'doc'   as const, size: '1.4 MB', when: 'hace 2 sem',  tag: 'Letras' },
+    { id: 'm6', name: 'Fondo Adoración 2.jpg',       kind: 'image' as const, size: '5.1 MB', when: 'hace 2 sem',  tag: 'Fondos' },
+    { id: 'm7', name: 'Transición Logo.mov',         kind: 'video' as const, size: '62 MB',  when: 'hace 3 sem',  tag: 'Bumper' },
+    { id: 'm8', name: 'Imagen Bienvenida.png',       kind: 'image' as const, size: '2.1 MB', when: 'hace 1 mes',  tag: 'Anuncios' },
+  ],
+  plan: {
+    id: 'p1', title: 'Servicio Dominical · 31 Mayo',
+    date: 'Domingo 31 de Mayo · 10:00 – 11:30',
+    leader: 'Lucía Hernández',
+    confirmados: 9, pendientes: 3, declinados: 1,
+    items: [
+      { id: 'i1', kind: 'section', label: 'Pre-servicio', duration: 15 },
+      { id: 'i2', kind: 'item',    label: 'Música ambiente',     who: 'Equipo Sonido',  duration: 10 },
+      { id: 'i3', kind: 'item',    label: 'Bienvenida y oración', who: 'Pastor Andrés', duration: 5 },
+      { id: 'i4', kind: 'section', label: 'Bloque de adoración', duration: 28 },
+      { id: 'i5', kind: 'song',    label: 'Maravilloso es',      who: 'Lucía · D', duration: 6, songKey: 'D' },
+      { id: 'i6', kind: 'song',    label: 'Eres todopoderoso',   who: 'Lucía · G', duration: 7, songKey: 'G' },
+      { id: 'i7', kind: 'song',    label: 'Cuán grande es Él',   who: 'Diego · G', duration: 6, songKey: 'G' },
+      { id: 'i8', kind: 'song',    label: 'Inunda este lugar',   who: 'Lucía · B', duration: 9, songKey: 'B' },
+      { id: 'i9', kind: 'section', label: 'Palabra', duration: 35 },
+      { id: 'i10', kind: 'item',   label: 'Anuncios + ofrenda',  who: 'Pastor Andrés', duration: 8 },
+      { id: 'i11', kind: 'item',   label: 'Mensaje — Romanos 8', who: 'Pastor Andrés', duration: 27 },
+      { id: 'i12', kind: 'section', label: 'Cierre', duration: 7 },
+      { id: 'i13', kind: 'song',   label: 'Renuévame (respuesta)', who: 'Lucía · E', duration: 5, songKey: 'E' },
+      { id: 'i14', kind: 'item',   label: 'Bendición',           who: 'Pastor Andrés', duration: 2 },
+    ] as { id: string; kind: 'section'|'item'|'song'; label: string; who?: string; duration: number; songKey?: string }[],
+    teams: [
+      { name: 'Alabanza · Equipo A', color: 1, people: [
+        { name: 'Lucía Hernández',  role: 'Voz líder',       status: 'confirmed' as const },
+        { name: 'Diego Ramírez',    role: 'Voz / Guitarra',  status: 'confirmed' as const },
+        { name: 'Marta Soto',       role: 'Coros',           status: 'pending'   as const },
+        { name: 'Javier Núñez',     role: 'Piano',           status: 'confirmed' as const },
+        { name: 'Sofía Bravo',      role: 'Bajo',            status: 'confirmed' as const },
+        { name: 'Pablo Romero',     role: 'Batería',         status: 'pending'   as const },
+      ]},
+      { name: 'Producción', color: 4, people: [
+        { name: 'Ana Vega',     role: 'Sonido',     status: 'confirmed' as const },
+        { name: 'Hugo Marín',   role: 'Pantallas',  status: 'confirmed' as const },
+        { name: 'Carla Pinto',  role: 'Luces',      status: 'declined'  as const },
+        { name: 'Tomás López',  role: 'Cámara',     status: 'pending'   as const },
+      ]},
+      { name: 'Hospitalidad', color: 3, people: [
+        { name: 'Elena Cano',   role: 'Recepción',  status: 'confirmed' as const },
+        { name: 'Miguel Ruiz',  role: 'Recepción',  status: 'confirmed' as const },
+        { name: 'Andrea Soler', role: 'Niños',      status: 'confirmed' as const },
+      ]},
+    ],
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sidebar (port of shell.jsx::Sidebar)
+// ─────────────────────────────────────────────────────────────────────────────
+function Sidebar({ route, onNav, sb, onSbToggle, user, org }: {
+  route: ServiciosTab; onNav: (id: ServiciosTab) => void
+  sb: 'full' | 'icons' | 'hidden'; onSbToggle: () => void
+  user: { name: string; role: string; initials: string }; org: { name: string }
 }) {
-  const [step, setStep] = useState<1 | 2 | 3>(1)
-  const [name, setName] = useState('')
-  const [color, setColor] = useState('#4F46E5')
-  const [recurrence, setRecurrence] = useState<Recurrence>('weekly')
-  const [times, setTimes] = useState<ServiceTime[]>([
-    { starts_on: nextSundayISO(), start_time: '11:00', end_time: '12:30', sort_order: 0 },
-  ])
-  const [teamIds, setTeamIds] = useState<string[]>([])
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
-  useEscape(onClose)
-
-  function next() {
-    setErr('')
-    if (step === 1) {
-      if (!name.trim()) { setErr('Indica un nombre'); return }
-      setStep(2)
-    } else if (step === 2) {
-      if (times.length === 0) { setErr('Añade al menos un horario'); return }
-      for (const t of times) {
-        if (!t.starts_on || !t.start_time || !t.end_time) { setErr('Completa todos los horarios'); return }
-        if (t.end_time <= t.start_time) { setErr('La hora de fin debe ser posterior'); return }
-      }
-      setStep(3)
-    }
-  }
-  function back() { setErr(''); if (step > 1) setStep((step - 1) as 1 | 2) }
-
-  async function submit() {
-    setBusy(true); setErr('')
-    try {
-      const res = await api(`/api/v1/tenant/${slug}/services/types`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), color, recurrence, times, team_ids: teamIds }),
-      })
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.detail || 'Error al crear') }
-      onCreated(await res.json())
-    } catch (e: any) { setErr(e.message); setBusy(false) }
-  }
-
-  function updateTime(i: number, patch: Partial<ServiceTime>) {
-    setTimes(prev => prev.map((t, idx) => idx === i ? { ...t, ...patch } : t))
-  }
-  function addTime() {
-    const last = times[times.length - 1]
-    setTimes(prev => [...prev, { starts_on: last?.starts_on || nextSundayISO(), start_time: '08:00', end_time: '09:00', sort_order: prev.length }])
-  }
-  function removeTime(i: number) {
-    setTimes(prev => prev.filter((_, idx) => idx !== i))
-  }
-  function toggleTeam(id: string) {
-    setTeamIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
-  }
-
-  const StepDot = ({ n, label }: { n: number; label: string }) => {
-    const active = step === n
-    const done = step > n
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: done || active ? 1 : 0.5 }}>
-        <span style={{ ...s.stepDot, background: active ? C.primary : done ? C.success : C.soft, color: active || done ? '#fff' : C.muted }}>
-          {done ? '✓' : n}
-        </span>
-        <span style={{ fontSize: 12, fontWeight: 600, color: active ? C.text : C.muted }}>{label}</span>
-      </div>
-    )
-  }
+  const links: { id: ServiciosTab; label: string; icon: React.ReactNode; ind?: string }[] = [
+    { id: 'mi-planificacion', label: 'Mi planificación', icon: <I.Home/>,   ind: '3' },
+    { id: 'servicios',        label: 'Servicios',        icon: <I.Cal/>,    ind: '4' },
+    { id: 'canciones',        label: 'Canciones',        icon: <I.Music/>,  ind: '128' },
+    { id: 'media',            label: 'Media',            icon: <I.Photo/> },
+    { id: 'personas',         label: 'Personas',         icon: <I.People/>, ind: '248' },
+  ]
+  const secondary: { id: ServiciosTab; label: string; icon: React.ReactNode; ind?: string }[] = [
+    { id: 'legacy', label: 'Vista antigua', icon: <I.Eye/> },
+  ]
 
   return (
-    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={s.modal}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <h3 style={s.modalTitle}>Nuevo tipo de servicio</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: C.muted, lineHeight: 1 }}>✕</button>
+    <aside className="sb">
+      <div className="sb-brand">
+        <div className="sb-logo"><I.Wave size={16}/></div>
+        <div style={{ minWidth: 0, lineHeight: 1.15 }}>
+          <div className="sb-name"><b>Worsyn</b></div>
+          <div className="sb-tag">{org.name.split(' ').slice(0,2).join(' ')}</div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '4px 0 8px', borderBottom: `1px solid ${C.border}` }}>
-          <StepDot n={1} label="Detalles" />
-          <span style={{ flex: 1, height: 1, background: C.border }} />
-          <StepDot n={2} label="Horarios" />
-          <span style={{ flex: 1, height: 1, background: C.border }} />
-          <StepDot n={3} label="Equipos" />
-        </div>
+        <button className="sb-toggle" onClick={onSbToggle} title="Plegar/expandir">
+          <I.Sidebar size={15}/>
+        </button>
+      </div>
 
-        <div style={{ flex: 1, overflowY: 'auto', padding: '4px 2px 0', display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {step === 1 && (
-            <>
-              <label style={s.label}>
-                Nombre del servicio
-                <input style={s.input} autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="p. ej. Servicio Dominical" />
-              </label>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <label style={s.label}>
-                  ¿Cuándo ocurre?
-                  <select style={s.select} value={recurrence} onChange={e => setRecurrence(e.target.value as Recurrence)}>
-                    {RECUR_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
-                  </select>
-                  <span style={{ fontSize: 11, color: C.muted, fontWeight: 400 }}>{RECUR_OPTIONS.find(o => o.v === recurrence)?.hint}</span>
-                </label>
-                <label style={s.label}>
-                  Color
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <input type="color" value={color} onChange={e => setColor(e.target.value)}
-                      style={{ width: 44, height: 38, border: `1px solid ${C.border}`, borderRadius: 8, padding: 2, cursor: 'pointer' }} />
-                    <span style={{ fontSize: 12, color: C.muted, fontFamily: 'monospace' }}>{color}</span>
-                  </div>
-                </label>
-              </div>
-            </>
-          )}
-
-          {step === 2 && (
-            <>
-              <p style={{ fontSize: 13, color: C.muted, margin: 0, lineHeight: 1.6 }}>
-                Selecciona el día y la franja horaria. Por defecto comenzamos el <strong style={{ color: C.text }}>próximo domingo</strong>.
-                Puedes añadir varios horarios para el mismo día o para días distintos.
-              </p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {times.map((t, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: C.soft, borderRadius: 10 }}>
-                    <input type="date" value={t.starts_on}
-                      onChange={e => updateTime(i, { starts_on: e.target.value })}
-                      style={{ ...s.input, flex: 1, minWidth: 0 }} />
-                    <span style={{ fontSize: 12, color: C.muted, flexShrink: 0 }}>de</span>
-                    <input type="time" value={t.start_time}
-                      onChange={e => updateTime(i, { start_time: e.target.value })}
-                      style={{ ...s.input, width: 100, flexShrink: 0 }} />
-                    <span style={{ fontSize: 12, color: C.muted, flexShrink: 0 }}>a</span>
-                    <input type="time" value={t.end_time}
-                      onChange={e => updateTime(i, { end_time: e.target.value })}
-                      style={{ ...s.input, width: 100, flexShrink: 0 }} />
-                    {times.length > 1 && (
-                      <button onClick={() => removeTime(i)} title="Quitar"
-                        style={{ background: 'none', border: 'none', color: C.danger, cursor: 'pointer', fontSize: 18, padding: 4, lineHeight: 1, flexShrink: 0 }}>×</button>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <button onClick={addTime} style={{ ...s.btnGhost, alignSelf: 'flex-start' }}>+ Añadir otro horario</button>
-              <p style={{ fontSize: 11, color: C.muted, margin: 0, fontStyle: 'italic' }}>
-                * Si tu iglesia tiene dos servicios el mismo día (p. ej. 9 h y 11 h), añade ambos.
-              </p>
-            </>
-          )}
-
-          {step === 3 && (
-            <>
-              <p style={{ fontSize: 13, color: C.muted, margin: 0, lineHeight: 1.6 }}>
-                Selecciona los equipos que participarán en este servicio. Puedes crearlos en{' '}
-                <strong style={{ color: C.text }}>Personas → Equipos</strong>.
-              </p>
-              {teams.length === 0 ? (
-                <div style={{ padding: 24, textAlign: 'center', border: `1px dashed ${C.border}`, borderRadius: 10, color: C.muted, fontSize: 13 }}>
-                  No has creado equipos todavía.<br/>
-                  Puedes crearlos más tarde en la pestaña Personas.
-                </div>
-              ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                  {teams.map(t => {
-                    const checked = teamIds.includes(t.id)
-                    return (
-                      <button key={t.id} onClick={() => toggleTeam(t.id)}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
-                          border: `1.5px solid ${checked ? C.primary : C.border}`,
-                          borderRadius: 10, background: checked ? C.primaryLight : '#fff',
-                          cursor: 'pointer', textAlign: 'left',
-                        }}>
-                        <div style={{ width: 10, height: 10, borderRadius: 3, background: t.color || C.primary, flexShrink: 0 }} />
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{t.name}</div>
-                          <div style={{ fontSize: 11, color: C.muted }}>{t.member_count} miembro{t.member_count === 1 ? '' : 's'}</div>
-                        </div>
-                        {checked && <span style={{ color: C.primary, fontWeight: 700 }}>✓</span>}
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
-            </>
-          )}
-          {err && <p style={s.errorText}>{err}</p>}
-        </div>
-
-        <div style={s.modalActions}>
-          <button onClick={step === 1 ? onClose : back} style={s.btnGhost}>
-            {step === 1 ? 'Cancelar' : '‹ Atrás'}
+      <div className="sb-section">
+        <div className="sb-section-label">Iglesia</div>
+        {links.map(l => (
+          <button key={l.id}
+            className={'sb-link' + (route === l.id ? ' is-active' : '')}
+            onClick={() => onNav(l.id)} title={l.label}>
+            {l.icon}
+            <span className="sb-link-text">{l.label}</span>
+            {l.ind && <span className="ind mono">{l.ind}</span>}
           </button>
-          {step < 3
-            ? <button onClick={next} style={s.btnPrimary}>Siguiente ›</button>
-            : <button onClick={submit} disabled={busy} style={s.btnPrimary}>{busy ? 'Creando…' : 'Crear servicio'}</button>}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MiniCalendar — sidebar, highlights service days
-// ─────────────────────────────────────────────────────────────────────────────
-function MiniCalendar({ occurrences, onSelect }: { occurrences: Occurrence[]; onSelect?: (iso: string) => void }) {
-  const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d })
-  const yr = cursor.getFullYear(), mo = cursor.getMonth()
-  const today = new Date(); const todayISO = today.toISOString().slice(0, 10)
-  const firstDOW = new Date(yr, mo, 1).getDay()
-  const offset = firstDOW === 0 ? 6 : firstDOW - 1
-  const daysInMo = new Date(yr, mo + 1, 0).getDate()
-  const cells = [...Array(offset).fill(null), ...Array.from({ length: daysInMo }, (_, i) => i + 1)]
-  const moName = cursor.toLocaleString('es-ES', { month: 'long' })
-  const moLabel = `${moName.charAt(0).toUpperCase() + moName.slice(1)} ${yr}`
-
-  const occByDate = useMemo(() => {
-    const m = new Map<string, Occurrence[]>()
-    for (const o of occurrences) {
-      const arr = m.get(o.date) || []
-      arr.push(o)
-      m.set(o.date, arr)
-    }
-    return m
-  }, [occurrences])
-
-  function shift(dir: -1 | 1) {
-    setCursor(d => { const n = new Date(d); n.setMonth(n.getMonth() + dir); return n })
-  }
-
-  return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{moLabel}</span>
-        <div style={{ display: 'flex', gap: 1 }}>
-          <button style={s.iconBtn} onClick={() => shift(-1)}>‹</button>
-          <button style={s.iconBtn} onClick={() => setCursor(() => { const d = new Date(); d.setDate(1); return d })}>•</button>
-          <button style={s.iconBtn} onClick={() => shift(1)}>›</button>
-        </div>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, textAlign: 'center' }}>
-        {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map(d => (
-          <span key={d} style={{ fontSize: 10, fontWeight: 700, color: C.light, padding: '2px 0' }}>{d}</span>
         ))}
-        {cells.map((day, i) => {
-          if (day == null) return <span key={i} />
-          const iso = `${yr}-${String(mo + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-          const isToday = iso === todayISO
-          const occs = occByDate.get(iso) || []
-          const hasOcc = occs.length > 0
-          const dotColor = occs[0]?.color || C.primary
-          return (
-            <button key={i} onClick={() => onSelect?.(iso)}
-              title={hasOcc ? occs.map(o => `${o.service_type_name} ${o.start_time}`).join(', ') : ''}
-              style={{
-                position: 'relative', fontSize: 12, padding: '5px 2px 8px', borderRadius: 5,
-                cursor: 'pointer', border: 'none',
-                background: isToday ? C.primary : 'transparent',
-                color: isToday ? '#fff' : C.text,
-                fontWeight: isToday ? 700 : 400,
-              }}>
-              {day}
-              {hasOcc && !isToday && (
-                <span style={{
-                  position: 'absolute', bottom: 3, left: '50%', transform: 'translateX(-50%)',
-                  width: 4, height: 4, borderRadius: 999, background: dotColor,
-                }} />
-              )}
-              {hasOcc && isToday && (
-                <span style={{
-                  position: 'absolute', bottom: 3, left: '50%', transform: 'translateX(-50%)',
-                  width: 4, height: 4, borderRadius: 999, background: '#fff',
-                }} />
-              )}
+      </div>
+
+      <div className="sb-section">
+        <div className="sb-section-label">Trabajo</div>
+        {secondary.map(l => (
+          <button key={l.id}
+            className={'sb-link' + (route === l.id ? ' is-active' : '')}
+            onClick={() => onNav(l.id)} title={l.label}>
+            {l.icon}
+            <span className="sb-link-text">{l.label}</span>
+            {l.ind && <span className="ind mono">{l.ind}</span>}
+          </button>
+        ))}
+      </div>
+
+      <div className="sb-foot">
+        <div className="sb-user">
+          <div className="sb-avatar">{user.initials}</div>
+          <div className="sb-user-text">
+            <div className="sb-user-name">{user.name}</div>
+            <div className="sb-user-role">{user.role}</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Topbar (port of shell.jsx::Topbar + Mi Perfil dropdown)
+// ─────────────────────────────────────────────────────────────────────────────
+function Topbar({ crumbs, onSbToggle, theme, appearance, setAppearance, onLogout }: {
+  crumbs: string[]
+  onSbToggle: () => void
+  theme: 'light' | 'dark'
+  appearance: Appearance
+  setAppearance: (a: Appearance) => void
+  onLogout: () => void
+}) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const wrapRef = React.useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!menuOpen) return
+    const onClick = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [menuOpen])
+
+  return (
+    <div className="tb">
+      <button className="icon-btn" onClick={onSbToggle} title="Menú"><I.Menu/></button>
+      <nav className="tb-crumbs">
+        {crumbs.map((c, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <span className="sep"><I.Chev size={11}/></span>}
+            <span className={i === crumbs.length - 1 ? 'cur' : ''}>{c}</span>
+          </React.Fragment>
+        ))}
+      </nav>
+      <button className="tb-search">
+        <I.Search/>
+        <span>Buscar canciones, personas, servicios…</span>
+        <kbd>⌘ K</kbd>
+      </button>
+      <div className="tb-actions" ref={wrapRef} style={{ position: 'relative' }}>
+        <button className="icon-btn" title="Tema" onClick={() => setAppearance(theme === 'dark' ? 'clean-light' : 'clean-dark')}>
+          {theme === 'dark' ? <I.Sun/> : <I.Moon/>}
+        </button>
+        <button className="icon-btn" title="Notificaciones"><I.Bell/></button>
+        <button className="icon-btn" title="Nuevo"><I.Plus/></button>
+        <button className="icon-btn" title="Mi Perfil" onClick={() => setMenuOpen(o => !o)}>
+          <I.User/>
+        </button>
+        {menuOpen && (
+          <div style={{
+            position: 'absolute', top: 'calc(100% + 6px)', right: 0,
+            background: 'var(--surface)', border: '1px solid var(--separator)',
+            borderRadius: 12, boxShadow: 'var(--shadow-3)', minWidth: 240, padding: 6,
+            zIndex: 80, animation: 'rise-in 160ms ease both',
+          }}>
+            <div style={{ fontFamily: 'Geist Mono, monospace', fontSize: 9.5, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-4)', padding: '10px 12px 4px' }}>Cuenta</div>
+            <button className="list-row" style={{ borderRadius: 8, fontSize: 13, padding: '9px 12px', width: '100%', border: 0 }}><I.User size={15}/> Editar perfil</button>
+            <button className="list-row" style={{ borderRadius: 8, fontSize: 13, padding: '9px 12px', width: '100%', border: 0 }}><I.Lock size={15}/> Cambiar contraseña</button>
+            <div style={{ height: 1, background: 'var(--separator)', margin: '4px -6px' }}/>
+            <div style={{ fontFamily: 'Geist Mono, monospace', fontSize: 9.5, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-4)', padding: '10px 12px 4px' }}>Apariencia</div>
+            {([
+              { id: 'clean-light' as const, label: 'Claro',       sub: 'Apple-clean, fondo blanco',  icon: <I.Sun size={15}/> },
+              { id: 'clean-dark'  as const, label: 'Menos claro', sub: 'Apple-clean, fondo oscuro',  icon: <I.Moon size={15}/> },
+              { id: 'cyber'       as const, label: 'Cyberpunk',   sub: 'Neón cian + magenta',        icon: <I.Sparkles size={15}/> },
+            ]).map(a => {
+              const active = a.id === appearance
+              return (
+                <button key={a.id} className="list-row"
+                  onClick={() => { setAppearance(a.id); setMenuOpen(false) }}
+                  style={{
+                    borderRadius: 8, fontSize: 13, padding: '9px 12px', width: '100%', border: 0,
+                    background: active ? 'var(--accent-tint)' : 'transparent',
+                    color: active ? 'var(--accent)' : 'var(--text-2)',
+                    display: 'flex', alignItems: 'center', gap: 10,
+                  }}>
+                  {a.icon}
+                  <span style={{ flex: 1, textAlign: 'left' }}>
+                    <span style={{ display: 'block', fontWeight: 600 }}>{a.label}</span>
+                    <span style={{ display: 'block', fontSize: 10.5, color: 'var(--text-3)', fontWeight: 400 }}>{a.sub}</span>
+                  </span>
+                  {active && <I.Check size={14}/>}
+                </button>
+              )
+            })}
+            <div style={{ height: 1, background: 'var(--separator)', margin: '4px -6px' }}/>
+            <button className="list-row" style={{ borderRadius: 8, fontSize: 13, padding: '9px 12px', width: '100%', border: 0, color: 'var(--danger)' }} onClick={onLogout}>
+              <I.Logout size={15}/> Cerrar sesión
             </button>
-          )
-        })}
+          </div>
+        )}
       </div>
     </div>
   )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MasterCalendarModal — full-month grid with detail per day
+// buildCal — mini-cal helper (port of screens-a.jsx::buildCal)
 // ─────────────────────────────────────────────────────────────────────────────
-function MasterCalendarModal({ occurrences, onClose }: { occurrences: Occurrence[]; onClose: () => void }) {
-  const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d })
-  const [selectedDay, setSelectedDay] = useState<string | null>(null)
-  const yr = cursor.getFullYear(), mo = cursor.getMonth()
-  const firstDOW = new Date(yr, mo, 1).getDay()
-  const offset = firstDOW === 0 ? 6 : firstDOW - 1
-  const daysInMo = new Date(yr, mo + 1, 0).getDate()
-  const cells = [...Array(offset).fill(null), ...Array.from({ length: daysInMo }, (_, i) => i + 1)]
-  const today = new Date(); const todayISO = today.toISOString().slice(0, 10)
-  const moName = cursor.toLocaleString('es-ES', { month: 'long' })
-  const moLabel = `${moName.charAt(0).toUpperCase() + moName.slice(1)} ${yr}`
+function buildCal(year: number, month: number) {
+  const first = new Date(year, month, 1)
+  const start = (first.getDay() + 6) % 7
+  const days = new Date(year, month + 1, 0).getDate()
+  const prevDays = new Date(year, month, 0).getDate()
+  const cells: { d: number; other?: boolean; today?: boolean; evt?: boolean; selected?: boolean }[] = []
+  for (let i = 0; i < start; i++) cells.push({ d: prevDays - start + 1 + i, other: true })
+  for (let d = 1; d <= days; d++) {
+    const wd = new Date(year, month, d).getDay()
+    const evt = wd === 0 || (wd === 3 && d >= 4) || d === 22
+    cells.push({ d, today: d === 26, evt, selected: d === 31 })
+  }
+  while (cells.length % 7) cells.push({ d: cells.length - days - start + 1, other: true })
+  return cells
+}
 
-  const occByDate = useMemo(() => {
-    const m = new Map<string, Occurrence[]>()
-    for (const o of occurrences) {
-      const a = m.get(o.date) || []; a.push(o); m.set(o.date, a)
-    }
-    return m
-  }, [occurrences])
+// ─────────────────────────────────────────────────────────────────────────────
+// MiPlanificacion (port of screens-a.jsx::MiPlanificacion)
+// ─────────────────────────────────────────────────────────────────────────────
+function MiPlanificacion({ userFirstName, onOpenPlan }: { userFirstName: string; onOpenPlan: () => void }) {
+  const cal = buildCal(2026, 4)
+  const [requests, setRequests] = useState(SEED.pendingRequests)
+  const [detailReq, setDetailReq] = useState<typeof SEED.pendingRequests[number] | null>(null)
+  const [toast, setToast] = useState<{ accepted: boolean; svc: string; from?: string } | null>(null)
 
-  const selectedOccs = selectedDay ? occByDate.get(selectedDay) || [] : []
-
-  function shift(dir: -1 | 1) {
-    setCursor(d => { const n = new Date(d); n.setMonth(n.getMonth() + dir); return n })
+  const respond = (req: typeof SEED.pendingRequests[number], accept: boolean) => {
+    setRequests(rs => rs.filter(r => r.id !== req.id))
+    setDetailReq(null)
+    setToast({ accepted: accept, svc: req.svc, from: req.from.name })
+    setTimeout(() => setToast(null), 3200)
   }
 
   return (
-    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div data-tp="cal-modal" style={{ ...s.modal, width: 940, maxWidth: '95vw', maxHeight: '92vh' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <h3 style={s.modalTitle}>Calendario maestro</h3>
-            <span style={{ fontSize: 13, color: C.muted }}>{occurrences.length} ocurrencia{occurrences.length === 1 ? '' : 's'} en el rango</span>
-          </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: C.muted, lineHeight: 1 }}>✕</button>
+    <div className="content">
+      <div className="page-head rise">
+        <div>
+          <span className="eyebrow">Mi planificación</span>
+          <h1 className="page-title">Buenos días, <em>{userFirstName}</em>.</h1>
+          <p className="page-sub">
+            Tienes <b style={{ color: 'var(--text)' }}>3 servicios</b> esta semana
+            {requests.length > 0 && <> y <b style={{ color: 'var(--accent)' }}>{requests.length} solicitudes</b> esperando tu respuesta</>}.
+          </p>
         </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <button style={s.iconBtn} onClick={() => shift(-1)}>‹</button>
-            <span style={{ fontSize: 15, fontWeight: 700, color: C.text, minWidth: 160 }}>{moLabel}</span>
-            <button style={s.iconBtn} onClick={() => shift(1)}>›</button>
-          </div>
-          <button style={s.btnGhost} onClick={() => setCursor(() => { const d = new Date(); d.setDate(1); return d })}>Hoy</button>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn btn-secondary"><I.Cal size={14}/> Mes completo</button>
+          <button className="btn btn-primary"><I.Plus size={14}/> Nuevo servicio</button>
         </div>
+      </div>
 
-        <div data-tp="cal-modal-body" style={{ display: 'flex', gap: 16, flex: 1, overflow: 'hidden' }}>
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, textAlign: 'center', marginBottom: 4 }}>
-              {['LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB', 'DOM'].map(d => (
-                <span key={d} style={{ fontSize: 11, fontWeight: 700, color: C.light, padding: '4px 0', letterSpacing: '0.06em' }}>{d}</span>
-              ))}
-            </div>
-            <div style={{ flex: 1, display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4, overflow: 'auto' }}>
-              {cells.map((day, i) => {
-                if (day == null) return <div key={i} />
-                const iso = `${yr}-${String(mo + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-                const isToday = iso === todayISO
-                const isSel = iso === selectedDay
-                const occs = occByDate.get(iso) || []
-                return (
-                  <button key={i} onClick={() => setSelectedDay(iso)}
-                    style={{
-                      minHeight: 70, padding: '6px 8px', textAlign: 'left',
-                      background: isSel ? C.primaryLight : '#fff',
-                      border: `1.5px solid ${isSel ? C.primary : isToday ? C.primaryMid : C.border}`,
-                      borderRadius: 8, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4,
-                    }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: isToday ? C.primary : C.text }}>{day}</span>
-                    {occs.slice(0, 2).map((o, idx) => (
-                      <span key={idx} style={{
-                        fontSize: 10, fontWeight: 600, color: '#fff',
-                        background: o.color || C.primary, borderRadius: 4,
-                        padding: '2px 5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}>
-                        {o.start_time} {o.service_type_name}
-                      </span>
-                    ))}
-                    {occs.length > 2 && (
-                      <span style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>+{occs.length - 2} más</span>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
-          <div data-tp="cal-modal-side" style={{ width: 280, flexShrink: 0, borderLeft: `1px solid ${C.border}`, paddingLeft: 16, overflow: 'auto' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: C.light, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 10 }}>
-              {selectedDay ? fmtDate(selectedDay) : 'Selecciona un día'}
-            </div>
-            {selectedDay && selectedOccs.length === 0 && (
-              <div style={{ fontSize: 13, color: C.muted, padding: '20px 0', textAlign: 'center' }}>
-                Sin servicios este día
+      {requests.length > 0 && (
+        <section className="rise rise-d2" style={{ marginBottom: 'var(--gap)' }}>
+          <div className="row-between" style={{ marginBottom: 12 }}>
+            <div>
+              <div className="row" style={{ gap: 8 }}>
+                <span className="mono" style={{ fontSize: 10, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--accent)', fontWeight: 700 }}>
+                  Solicitudes pendientes
+                </span>
+                <span className="pill-tone tone-coral">{requests.length}</span>
               </div>
-            )}
-            {selectedOccs.map((o, i) => (
-              <div key={i} style={{ display: 'flex', gap: 10, padding: '10px 0', borderBottom: `1px solid ${C.soft}` }}>
-                <div style={{ width: 6, borderRadius: 3, background: o.color || C.primary, flexShrink: 0 }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{o.service_type_name}</div>
-                  <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{o.start_time} – {o.end_time}</div>
+              <div style={{ fontSize: 13, color: 'var(--text-3)', marginTop: 2 }}>
+                Tu equipo necesita saber si cuentan contigo. Responde rápido para que puedan organizarse.
+              </div>
+            </div>
+            <button className="btn btn-ghost btn-sm">Ver todas <I.Chev size={12}/></button>
+          </div>
+
+          <div className="grid grid-12" style={{ gap: 'var(--gap)' }}>
+            {requests.map(req => (
+              <article key={req.id} className={'col-6 req-card tone-' + req.tone}>
+                <div className="req-card-deco"/>
+                <div className="row" style={{ gap: 12, position: 'relative', zIndex: 2 }}>
+                  <div className="av av-lg" data-c={req.from.tone === 'yellow' ? 7 : req.from.tone === 'violet' ? 3 : 5}>
+                    {req.from.initials}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>{req.from.name}</div>
+                      <span className={'pill-tone tone-' + req.tone}><span className="chip-dot"/>{req.svc}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 3 }}>
+                      Te invita como <b style={{ color: 'var(--text-2)' }}>{req.role}</b> · {req.team}
+                    </div>
+                  </div>
+                </div>
+                <div style={{
+                  marginTop: 14, padding: '12px 14px', borderRadius: 12,
+                  background: 'var(--surface-2)', border: '1px solid var(--separator)',
+                  fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5,
+                  position: 'relative', zIndex: 2,
+                }}>
+                  <span style={{ color: 'var(--text-4)', marginRight: 6, fontFamily: 'Geist, sans-serif', fontSize: 22, lineHeight: 0, verticalAlign: '-8px' }}>“</span>
+                  {req.message}
+                </div>
+                <div className="row" style={{ gap: 8, marginTop: 14, position: 'relative', zIndex: 2, fontSize: 12, color: 'var(--text-3)', flexWrap: 'wrap' }}>
+                  <span className="row" style={{ gap: 4 }}><I.Cal size={12}/> {req.date}</span>
+                  <span style={{ color: 'var(--text-4)' }}>·</span>
+                  <span className="row" style={{ gap: 4, color: 'var(--warning)' }}><I.Clock size={12}/> {req.deadline}</span>
+                </div>
+                <div className="row" style={{ gap: 8, marginTop: 14, position: 'relative', zIndex: 2 }}>
+                  <button className="btn btn-primary" onClick={() => respond(req, true)}>
+                    <I.Check size={14}/> Aceptar
+                  </button>
+                  <button className="btn btn-secondary" onClick={() => respond(req, false)}>
+                    <I.X size={14}/> Rechazar
+                  </button>
+                  <button className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setDetailReq(req)}>
+                    Ver detalle <I.Chev size={12}/>
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <div className="grid grid-12">
+        <section className="col-8 card rise rise-d3">
+          <div className="card-head">
+            <div>
+              <div className="card-title">Próximos servicios <span className="pill-tone tone-coral" style={{ marginLeft: 8 }}>Míos</span></div>
+              <div className="card-sub">Servicios donde ya estás confirmada o asignada</div>
+            </div>
+            <div className="seg">
+              <button className="seg-btn is-active">Míos</button>
+              <button className="seg-btn">Equipo</button>
+              <button className="seg-btn">Todos</button>
+            </div>
+          </div>
+          <div>
+            {SEED.upcoming.map((u, i) => (
+              <div key={i} className="list-row" style={{ borderRadius: 0 }} onClick={onOpenPlan}>
+                <div className="list-leading" style={{
+                  width: 60, height: 64, borderRadius: 12,
+                  background: u.color + '14',
+                  border: `1.5px solid ${u.color}44`,
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <div className="mono" style={{ fontSize: 9, color: u.color, letterSpacing: '0.14em', textTransform: 'uppercase', fontWeight: 700 }}>
+                    {u.date.split(' ')[0].slice(0,3)}
+                  </div>
+                  <div className="display-serif" style={{ fontSize: 26, lineHeight: 1, marginTop: 2 }}>{u.date.split(' ')[1]}</div>
+                </div>
+                <div className="list-body">
+                  <div className="row" style={{ gap: 8 }}>
+                    <div className="list-title">{u.svc}</div>
+                    <span className={'pill-tone tone-' + u.tone}><span className="chip-dot"/>{u.role}</span>
+                  </div>
+                  <div className="list-sub">{u.day} · {u.when} · {u.team}</div>
+                </div>
+                <div className="list-trail">
+                  <span className={'chip ' + (u.status === 'Confirmado' ? 't-success' : 't-warn')}>
+                    {u.status === 'Confirmado' ? <I.Check size={11}/> : <I.Clock size={11}/>} {u.status}
+                  </span>
+                  <span className="list-chev"><I.Chev/></span>
                 </div>
               </div>
             ))}
           </div>
+        </section>
+
+        <aside className="col-4 stack" style={{ gap: 'var(--gap)' }}>
+          <div className="card rise rise-d3">
+            <div className="card-head">
+              <div className="card-title">Mayo 2026</div>
+              <div className="row" style={{ gap: 4 }}>
+                <button className="icon-btn"><I.ChevLeft size={14}/></button>
+                <button className="icon-btn"><I.Chev size={14}/></button>
+              </div>
+            </div>
+            <div className="mini-cal">
+              <div className="mini-cal-grid">
+                {'L M X J V S D'.split(' ').map(d => <div key={d} className="mini-cal-dow">{d}</div>)}
+                {cal.map((c, i) => (
+                  <div key={i} className={`mini-cal-day${c.other ? ' is-other' : ''}${c.today ? ' is-today' : ''}${c.evt ? ' has-evt' : ''}${c.selected ? ' is-selected' : ''}`}>
+                    {c.d}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{ padding: '0 16px 14px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <span className="pill-tone tone-coral"><span className="chip-dot"/>Dominical</span>
+              <span className="pill-tone tone-violet"><span className="chip-dot"/>Oración</span>
+              <span className="pill-tone tone-yellow"><span className="chip-dot"/>Jóvenes</span>
+            </div>
+          </div>
+
+          <div className="card rise rise-d4">
+            <div className="card-head">
+              <div className="card-title">Acciones rápidas</div>
+            </div>
+            <div style={{ padding: 8 }}>
+              {[
+                { Icon: I.Plus,  t: 'Crear servicio',           sub: 'Plan, equipos y canciones', tone: 'coral' },
+                { Icon: I.Music, t: 'Añadir canción',           sub: 'A la biblioteca de la iglesia', tone: 'teal' },
+                { Icon: I.Send,  t: 'Solicitar disponibilidad', sub: 'Pregunta a tu equipo', tone: 'yellow' },
+                { Icon: I.Doc,   t: 'Plantilla de servicio',    sub: 'Reutiliza una existente', tone: 'violet' },
+              ].map((a, idx) => (
+                <button key={idx} className={'list-row tone-' + a.tone} style={{ width: '100%', textAlign: 'left', borderRadius: 10, border: 0 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--tone-tint)', display: 'grid', placeItems: 'center', color: 'var(--tone)' }}>
+                    <a.Icon size={16}/>
+                  </div>
+                  <div className="list-body">
+                    <div className="list-title" style={{ fontWeight: 500 }}>{a.t}</div>
+                    <div className="list-sub">{a.sub}</div>
+                  </div>
+                  <span className="list-chev"><I.Chev/></span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </aside>
+
+        <section className="col-12 card rise rise-d4">
+          <div className="card-head">
+            <div className="card-title">Actividad reciente</div>
+            <button className="btn btn-ghost btn-sm">Ver todo</button>
+          </div>
+          <div>
+            {[
+              { Icon: I.Music, who: 'Diego Ramírez',  what: 'añadió 2 canciones al plan del 31 May',     when: 'hace 12 min', c: 7 },
+              { Icon: I.Check, who: 'Marta Soto',     what: 'confirmó asistencia al Culto de Oración',   when: 'hace 1 h',   c: 3 },
+              { Icon: I.Edit,  who: 'Pastor Andrés',  what: 'editó las notas del mensaje · Romanos 8',   when: 'hace 3 h',   c: 4 },
+              { Icon: I.People,who: 'Lucía Hernández',what: 'invitó a 3 personas al equipo Alabanza',    when: 'ayer',       c: 1 },
+            ].map((a, i) => (
+              <div key={i} className="list-row" style={{ borderRadius: 0 }}>
+                <div className="av av-sm" data-c={a.c}>{a.who.split(' ').map(w => w[0]).slice(0,2).join('')}</div>
+                <div className="list-body">
+                  <div className="list-title" style={{ fontWeight: 500 }}>
+                    {a.who} <span style={{ color: 'var(--text-3)', fontWeight: 400 }}>{a.what}</span>
+                  </div>
+                  <div className="list-sub">{a.when}</div>
+                </div>
+                <a.Icon size={14}/>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      {detailReq && <RequestDetail req={detailReq} onClose={() => setDetailReq(null)} onRespond={respond}/>}
+
+      {toast && (
+        <div style={{
+          position: 'fixed', bottom: 28, left: '50%', transform: 'translateX(-50%)',
+          padding: '12px 18px 12px 14px', borderRadius: 999,
+          background: toast.accepted ? 'var(--accent-tint)' : 'var(--surface)',
+          border: '1px solid ' + (toast.accepted ? 'var(--success)' : 'var(--hairline)'),
+          color: 'var(--text)', boxShadow: 'var(--shadow-3)',
+          fontSize: 13, fontWeight: 600,
+          display: 'flex', alignItems: 'center', gap: 10, zIndex: 400,
+          animation: 'rise-in 320ms cubic-bezier(.2,.7,.2,1) both',
+        }}>
+          <div style={{
+            width: 24, height: 24, borderRadius: 999,
+            background: toast.accepted ? 'var(--success)' : 'var(--text-4)',
+            color: '#fff', display: 'grid', placeItems: 'center',
+          }}>{toast.accepted ? <I.Check size={13}/> : <I.X size={13}/>}</div>
+          {toast.accepted
+            ? <>¡Genial! Sabrá que cuentas con tú en {toast.svc}.</>
+            : <>{toast.svc}: avisamos a quien te invitó.</>}
         </div>
+      )}
+    </div>
+  )
+}
+
+function RequestDetail({ req, onClose, onRespond }: {
+  req: typeof SEED.pendingRequests[number]
+  onClose: () => void
+  onRespond: (req: typeof SEED.pendingRequests[number], accept: boolean) => void
+}) {
+  return (
+    <>
+      <div className="drawer-backdrop" onClick={onClose}/>
+      <aside className="drawer">
+        <div className="drawer-head" style={{ background: `linear-gradient(135deg, ${req.from.color}24, transparent 60%), var(--surface)` }}>
+          <div className="row-between" style={{ marginBottom: 12 }}>
+            <span className={'pill-tone tone-' + req.tone}><span className="chip-dot"/>{req.svc}</span>
+            <button className="icon-btn" onClick={onClose}><I.X size={14}/></button>
+          </div>
+          <div className="row" style={{ gap: 14 }}>
+            <div className="av av-lg" data-c={req.from.tone === 'yellow' ? 7 : req.from.tone === 'violet' ? 3 : 5} style={{ width: 48, height: 48, fontSize: 15 }}>
+              {req.from.initials}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 12, color: 'var(--text-3)' }}>Solicitud de</div>
+              <div style={{ fontSize: 26, fontWeight: 700, lineHeight: 1.1, marginTop: 2 }}>{req.from.name}</div>
+            </div>
+          </div>
+        </div>
+        <div className="drawer-body">
+          <div className="stack" style={{ gap: 18 }}>
+            <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+              {[{ l: 'Fecha', v: req.date }, { l: 'Rol', v: req.role }, { l: 'Equipo', v: req.team }].map((s, i) => (
+                <div key={i} style={{
+                  flex: 1, minWidth: 120, padding: 12, borderRadius: 12,
+                  background: 'var(--surface-2)', border: '1px solid var(--separator)',
+                }}>
+                  <div className="mono" style={{ fontSize: 9.5, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-3)', fontWeight: 600 }}>{s.l}</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, marginTop: 4 }}>{s.v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{
+              padding: 16, borderRadius: 14, background: 'var(--surface-2)',
+              border: '1px solid var(--separator)',
+              fontSize: 14, color: 'var(--text-2)', lineHeight: 1.55,
+            }}>
+              <span style={{ color: req.from.color, marginRight: 6, fontSize: 28, lineHeight: 0, verticalAlign: '-10px' }}>“</span>
+              {req.message}
+            </div>
+            <div>
+              <div className="mono" style={{ fontSize: 10, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-3)', fontWeight: 600, marginBottom: 10 }}>
+                Repertorio previsto
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {req.songs.map((s, i) => (
+                  <div key={i} className="row" style={{ gap: 10, padding: '10px 12px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--separator)' }}>
+                    <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center' }}>
+                      <I.Music size={13}/>
+                    </div>
+                    <div style={{ flex: 1, fontSize: 13.5, fontWeight: 500 }}>{s}</div>
+                    <span className="mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>#{i + 1}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{
+              padding: 14, borderRadius: 12,
+              background: 'color-mix(in oklab, var(--warning) 8%, var(--surface))',
+              border: '1px solid color-mix(in oklab, var(--warning) 30%, transparent)',
+              fontSize: 13, color: 'var(--text-2)',
+              display: 'flex', gap: 10, alignItems: 'flex-start',
+            }}>
+              <I.Clock size={16}/>
+              <div><b>{req.deadline}.</b> Si no respondes a tiempo, tu líder buscará a otra persona.</div>
+            </div>
+          </div>
+        </div>
+        <div className="drawer-foot">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-secondary" onClick={() => onRespond(req, false)}>
+            <I.X size={14}/> Rechazar
+          </button>
+          <button className="btn btn-primary" onClick={() => onRespond(req, true)}>
+            <I.Check size={14}/> Aceptar invitación
+          </button>
+        </div>
+      </aside>
+    </>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Servicios list (port of screens-a.jsx::Servicios)
+// ─────────────────────────────────────────────────────────────────────────────
+interface ApiServiceType { id: string; name: string; color?: string | null; recurrence?: string | null; times?: { start_time: string; end_time: string }[] | null }
+
+function ServiciosList({ slug, onOpenPlan }: { slug: string; onOpenPlan: () => void }) {
+  // Wire real /services/types — fall back to SEED if empty
+  const [apiTypes, setApiTypes] = useState<ApiServiceType[]>([])
+  useEffect(() => {
+    api(`/api/v1/tenant/${slug}/services/types`).then(r => r.ok ? r.json() : []).then((t: ApiServiceType[]) => setApiTypes(t || []))
+  }, [slug])
+
+  const types = apiTypes.length > 0
+    ? apiTypes.map((t, i) => ({
+        id: t.id, name: t.name, color: t.color || ['#0A84FF','#AF52DE','#FF9500','#FF2D55'][i % 4],
+        rec: t.recurrence || 'Sin recurrencia',
+        times: (t.times || []).map(x => `${x.start_time} – ${x.end_time}`),
+        instances: SEED.serviceTypes[i % SEED.serviceTypes.length].instances,
+      }))
+    : SEED.serviceTypes
+
+  const statusTone: Record<string, { c: string; bg: string }> = {
+    'Publicado':  { c: 'var(--success)', bg: 'var(--accent-tint)' },
+    'Borrador':   { c: 'var(--text-3)',  bg: 'var(--surface-3)' },
+    'Sin equipo': { c: 'var(--danger)',  bg: 'color-mix(in oklab, var(--danger) 14%, transparent)' },
+    'Reclutando': { c: 'var(--warning)', bg: 'color-mix(in oklab, var(--warning) 14%, transparent)' },
+  }
+
+  return (
+    <div className="content">
+      <div className="page-head rise">
+        <div>
+          <span className="eyebrow">Servicios</span>
+          <h1 className="page-title">Servicios <em>programados</em></h1>
+          <p className="page-sub">Cada tipo de servicio agrupa sus próximas ocurrencias. Abre cualquiera para editar plan, equipos y canciones.</p>
+        </div>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn btn-secondary"><I.Filter size={14}/> Filtrar</button>
+          <button className="btn btn-secondary"><I.Settings size={14}/> Gestionar tipos</button>
+          <button className="btn btn-primary"><I.Plus size={14}/> Nuevo servicio</button>
+        </div>
+      </div>
+
+      <div className="grid grid-12 rise rise-d2">
+        {types.map(st => (
+          <article key={st.id} className="col-6 card" style={{ overflow: 'hidden' }}>
+            <div className="svc-ribbon" style={{
+              background: `linear-gradient(135deg, ${st.color}, color-mix(in oklab, ${st.color} 70%, #000))`,
+            }}>
+              <div className="svc-ribbon-deco"/>
+              <div className="svc-ribbon-deco b"/>
+              <div style={{ flex: 1, position: 'relative', zIndex: 2 }}>
+                <div className="svc-ribbon-sub">{st.rec}</div>
+                <div className="svc-ribbon-title">{st.name}</div>
+              </div>
+              <div style={{ position: 'relative', zIndex: 2, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                <div className="display-serif" style={{ fontSize: 36, lineHeight: 1, color: '#fff' }}>{st.instances.length}</div>
+                <div className="mono" style={{ fontSize: 9.5, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.85)', fontWeight: 600 }}>próximos</div>
+              </div>
+            </div>
+            <div className="row" style={{ gap: 8, padding: '12px 18px', borderBottom: '1px solid var(--separator)', flexWrap: 'wrap' }}>
+              {st.times.map(t => (
+                <span key={t} className="chip"><I.Clock size={11}/>{t}</span>
+              ))}
+              <span style={{ flex: 1 }}/>
+              <button className="btn btn-ghost btn-sm"><I.Settings size={12}/> Configurar tipo</button>
+            </div>
+            <div>
+              {st.instances.map(inst => {
+                const tn = statusTone[inst.status] || statusTone['Borrador']
+                return (
+                  <div key={inst.id} className="svc-instance" onClick={onOpenPlan}>
+                    <div className="svc-instance-date" style={{ ['--tone' as any]: st.color }}>
+                      <div className="m" style={{ color: st.color }}>{inst.dow}</div>
+                      <div className="d">{inst.date.split(' ')[0]}</div>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: 14, fontWeight: 600 }}>
+                          {(inst as any).special || st.name}
+                        </div>
+                        <span style={{
+                          height: 22, padding: '0 8px', borderRadius: 999,
+                          fontSize: 11, fontWeight: 600,
+                          background: tn.bg, color: tn.c,
+                          display: 'inline-flex', alignItems: 'center', gap: 4,
+                        }}>
+                          <span style={{ width: 5, height: 5, borderRadius: 99, background: 'currentColor' }}/>
+                          {inst.status}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 3 }}>
+                        {inst.date} · {inst.time}
+                        {inst.teamTotal > 0 && <> · {inst.teamConfirmed}/{inst.teamTotal} confirmados</>}
+                        {inst.leader && inst.leader !== 'Por asignar' && <> · {inst.leader}</>}
+                        {inst.leader === 'Por asignar' && <> · <span style={{ color: 'var(--danger)' }}>sin líder</span></>}
+                      </div>
+                      {inst.teamTotal > 0 && (
+                        <div style={{ marginTop: 8, display: 'flex', height: 4, borderRadius: 99, background: 'var(--surface-3)', overflow: 'hidden', maxWidth: 220 }}>
+                          <div style={{ width: `${(inst.teamConfirmed/inst.teamTotal)*100}%`, background: st.color }}/>
+                        </div>
+                      )}
+                    </div>
+                    <span className="list-chev"><I.Chev/></span>
+                  </div>
+                )
+              })}
+              <div className="row" style={{ padding: '10px 18px', borderTop: '1px solid var(--separator)', background: 'var(--surface-2)' }}>
+                <button className="btn btn-ghost btn-sm"><I.Plus size={12}/> Nuevo {st.name.toLowerCase()}</button>
+                <span style={{ flex: 1 }}/>
+                <button className="btn btn-ghost btn-sm">Ver todos <I.Chev size={12}/></button>
+              </div>
+            </div>
+          </article>
+        ))}
       </div>
     </div>
   )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ServiceTypeCard — collapsible card per service in ListView
+// PlanDetail (port of screens-a.jsx::PlanDetail)
 // ─────────────────────────────────────────────────────────────────────────────
-function ServiceTypeCard({ type, plans, occurrences, onDelete, onAddPlan }: {
-  type: ServiceType
-  plans: ServicePlan[]
-  occurrences: Occurrence[]
-  onDelete: () => void
-  onAddPlan: () => void
-}) {
-  const [open, setOpen] = useState(true)
-  const color = typeColor(type)
-  const next5 = occurrences.filter(o => o.service_type_id === type.id).slice(0, 5)
-
+function PlanDetail({ onBack }: { onBack: () => void }) {
+  const p = SEED.plan
+  const total = p.items.reduce((s, x) => s + x.duration, 0)
+  const [tab, setTab] = useState('orden')
   return (
-    <div style={s.typeCard}>
-      <div style={{ ...s.typeHeader, borderRadius: open ? '10px 10px 0 0' : 10 }} onClick={() => setOpen(o => !o)}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 12, height: 12, borderRadius: 3, background: color, flexShrink: 0 }} />
-          <svg viewBox="0 0 20 20" fill="currentColor" width={12} height={12}
-            style={{ color: C.muted, transform: open ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform .15s' }}>
-            <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
-          </svg>
-          <span style={s.typeName}>{type.name}</span>
-          <span style={{ ...s.pill, background: C.soft, color: C.muted }}>{recurLabel(type.recurrence)}</span>
-          {type.times.length > 0 && (
-            <span style={{ fontSize: 12, color: C.muted }}>
-              {type.times.length === 1
-                ? `${WEEKDAYS[type.times[0].weekday ?? 0]} · ${type.times[0].start_time}–${type.times[0].end_time}`
-                : `${type.times.length} horarios`}
-            </span>
-          )}
+    <div className="content">
+      <div className="page-head rise">
+        <div>
+          <div className="row" style={{ gap: 8, marginBottom: 8 }}>
+            <button className="btn btn-ghost btn-sm" onClick={onBack}><I.ChevLeft size={13}/> Servicios</button>
+            <span className="pill-tone tone-teal"><span className="chip-dot"/>Publicado</span>
+            <span className="chip">{p.confirmados + p.pendientes + p.declinados} personas</span>
+          </div>
+          <h1 className="page-title">{p.title.split('·')[0]} <em>·</em> <span>{p.title.split('·')[1]}</span></h1>
+          <p className="page-sub">{p.date} · Líder: <b style={{ color: 'var(--text)' }}>{p.leader}</b></p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={e => e.stopPropagation()}>
-          <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12 }} onClick={onAddPlan}>+ Plan</button>
-          <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, color: C.danger, borderColor: 'rgba(239,68,68,.3)' }}
-            onClick={() => { if (confirm(`¿Eliminar "${type.name}"?`)) onDelete() }}>Eliminar</button>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn btn-secondary"><I.Send size={14}/> Notificar equipo</button>
+          <button className="btn btn-secondary"><I.Eye size={14}/> Vista pública</button>
+          <button className="btn btn-primary"><I.Play size={12}/> Modo en vivo</button>
         </div>
       </div>
 
-      {open && (
-        <div style={{ padding: '8px 0' }}>
-          {type.times.length > 0 && (
-            <div style={{ padding: '8px 16px 4px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {type.times.map((t, i) => (
-                <span key={i} style={{ ...s.pill, background: C.primaryLight, color: C.primary }}>
-                  {WEEKDAYS[t.weekday ?? 0]} · {t.start_time}–{t.end_time}
-                </span>
-              ))}
-            </div>
-          )}
+      <div className="row" style={{ marginBottom: 'var(--gap)', borderBottom: '1px solid var(--separator)', gap: 0 }}>
+        {[
+          { id: 'orden', l: 'Orden de servicio' },
+          { id: 'equipos', l: 'Equipos · 13' },
+          { id: 'canciones', l: 'Canciones · 5' },
+          { id: 'media', l: 'Media · 8' },
+          { id: 'notas', l: 'Notas' },
+          { id: 'historial', l: 'Historial' },
+        ].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            style={{
+              padding: '12px 14px', fontSize: 13.5, fontWeight: 500,
+              color: tab === t.id ? 'var(--text)' : 'var(--text-3)',
+              borderBottom: '2px solid ' + (tab === t.id ? 'var(--accent)' : 'transparent'),
+              marginBottom: -1, letterSpacing: '-0.005em',
+            }}>{t.l}</button>
+        ))}
+      </div>
 
-          <table style={s.planTable}>
+      <div className="grid grid-12 rise rise-d2">
+        <section className="col-8 card">
+          <div className="card-head">
+            <div>
+              <div className="card-title">Orden de servicio</div>
+              <div className="card-sub">{p.items.length} elementos · {Math.floor(total/60)}h {total%60}min totales</div>
+            </div>
+            <div className="row" style={{ gap: 6 }}>
+              <button className="btn btn-ghost btn-sm"><I.Doc size={13}/> Plantilla</button>
+              <button className="btn btn-secondary btn-sm"><I.Plus size={13}/> Añadir</button>
+            </div>
+          </div>
+          <div>
+            {p.items.map((it, idx) => {
+              if (it.kind === 'section') {
+                return (
+                  <div key={it.id} style={{
+                    padding: '14px 16px 8px',
+                    borderTop: idx > 0 ? '1px solid var(--separator)' : 0,
+                    background: 'var(--surface-2)',
+                  }}>
+                    <div className="row-between">
+                      <div className="mono" style={{ fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--text-3)', fontWeight: 600 }}>{it.label}</div>
+                      <div className="mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{it.duration} min</div>
+                    </div>
+                  </div>
+                )
+              }
+              const isSong = it.kind === 'song'
+              return (
+                <div key={it.id} className="list-row" style={{ borderRadius: 0, paddingLeft: 12 }}>
+                  <div className="list-leading" style={{ color: 'var(--text-4)', cursor: 'grab' }}><I.Grip size={14}/></div>
+                  <div style={{
+                    width: 30, height: 30, borderRadius: 8,
+                    background: isSong ? 'var(--accent-tint)' : 'var(--surface-3)',
+                    color: isSong ? 'var(--accent)' : 'var(--text-2)',
+                    display: 'grid', placeItems: 'center', flexShrink: 0,
+                  }}>{isSong ? <I.Music size={14}/> : <I.Doc size={14}/>}</div>
+                  <div className="list-body">
+                    <div className="row" style={{ gap: 8 }}>
+                      <div className="list-title">{it.label}</div>
+                      {isSong && <span className="chip t-mono mono">{it.songKey}</span>}
+                    </div>
+                    <div className="list-sub">{it.who}</div>
+                  </div>
+                  <div className="list-trail">
+                    <span className="mono" style={{ fontSize: 12, color: 'var(--text-3)' }}>{it.duration} min</span>
+                    <button className="icon-btn"><I.Dots size={14}/></button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <div style={{ padding: '14px 16px', borderTop: '1px solid var(--separator)', background: 'var(--surface-2)' }}>
+            <div className="row-between">
+              <button className="btn btn-ghost btn-sm"><I.Plus size={13}/> Añadir elemento</button>
+              <div className="mono" style={{ fontSize: 12, color: 'var(--text-2)', fontWeight: 600 }}>
+                Total · {Math.floor(total/60)}h {total%60}min
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside className="col-4 stack" style={{ gap: 'var(--gap)' }}>
+          <div className="card">
+            <div className="card-head">
+              <div className="card-title">Confirmaciones</div>
+              <button className="btn btn-ghost btn-sm">Pedir</button>
+            </div>
+            <div style={{ padding: 16 }}>
+              <div className="row" style={{ gap: 14, marginBottom: 12 }}>
+                <div>
+                  <div className="display-serif" style={{ fontSize: 32, lineHeight: 1, color: 'var(--success)' }}>{p.confirmados}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>Confirmados</div>
+                </div>
+                <div>
+                  <div className="display-serif" style={{ fontSize: 32, lineHeight: 1, color: 'var(--warning)' }}>{p.pendientes}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>Pendientes</div>
+                </div>
+                <div>
+                  <div className="display-serif" style={{ fontSize: 32, lineHeight: 1, color: 'var(--danger)' }}>{p.declinados}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>No puede</div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', height: 6, borderRadius: 999, overflow: 'hidden', background: 'var(--surface-3)' }}>
+                <div style={{ width: `${p.confirmados/13*100}%`, background: 'var(--success)' }}/>
+                <div style={{ width: `${p.pendientes/13*100}%`, background: 'var(--warning)' }}/>
+                <div style={{ width: `${p.declinados/13*100}%`, background: 'var(--danger)' }}/>
+              </div>
+            </div>
+          </div>
+
+          {p.teams.map((team, ti) => (
+            <div key={ti} className="card">
+              <div className="card-head">
+                <div>
+                  <div className="card-title">{team.name}</div>
+                  <div className="card-sub">{team.people.length} miembros</div>
+                </div>
+                <button className="icon-btn"><I.Plus size={14}/></button>
+              </div>
+              <div>
+                {team.people.map((person, pi) => (
+                  <div key={pi} className="list-row" style={{ borderRadius: 0 }}>
+                    <div className="av av-sm" data-c={team.color}>{person.name.split(' ').map(w => w[0]).slice(0,2).join('')}</div>
+                    <div className="list-body">
+                      <div className="list-title" style={{ fontSize: 13 }}>{person.name}</div>
+                      <div className="list-sub">{person.role}</div>
+                    </div>
+                    {person.status === 'confirmed' && <span className="chip t-success" style={{ height: 18, fontSize: 10 }}><I.Check size={9}/></span>}
+                    {person.status === 'pending'   && <span className="chip t-warn"    style={{ height: 18, fontSize: 10 }}><I.Clock size={9}/></span>}
+                    {person.status === 'declined'  && <span className="chip t-danger"  style={{ height: 18, fontSize: 10 }}><I.X size={9}/></span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </aside>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Canciones (port of screens-b.jsx::Canciones) — uses SEED.songs
+// ─────────────────────────────────────────────────────────────────────────────
+function Canciones({ onOpenSong }: { onOpenSong: () => void }) {
+  const [view, setView] = useState<'list' | 'grid' | 'setlist'>('list')
+  return (
+    <div className="content">
+      <div className="page-head rise">
+        <div>
+          <span className="eyebrow">Biblioteca</span>
+          <h1 className="page-title">Tu repertorio, en <em>orden</em></h1>
+          <p className="page-sub">128 canciones disponibles. Filtra por tono, BPM o etiqueta. Reusa, transpone y arrastra a cualquier servicio.</p>
+        </div>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn btn-secondary"><I.Down size={14}/> Importar CCLI</button>
+          <button className="btn btn-primary"><I.Plus size={14}/> Nueva canción</button>
+        </div>
+      </div>
+
+      <div className="card rise rise-d1" style={{ marginBottom: 'var(--gap)' }}>
+        <div style={{ padding: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ position: 'relative', flex: 1, minWidth: 220 }}>
+            <I.Search size={14}/>
+            <input className="input" placeholder="Buscar canciones, autores, CCLI…" style={{ paddingLeft: 36 }}/>
+          </div>
+          <div className="seg">
+            <button onClick={() => setView('list')}    className={'seg-btn' + (view === 'list' ? ' is-active' : '')}>Lista</button>
+            <button onClick={() => setView('grid')}    className={'seg-btn' + (view === 'grid' ? ' is-active' : '')}>Tarjetas</button>
+            <button onClick={() => setView('setlist')} className={'seg-btn' + (view === 'setlist' ? ' is-active' : '')}>Setlists</button>
+          </div>
+          <button className="btn btn-secondary btn-sm"><I.Filter size={13}/> Tono</button>
+          <button className="btn btn-secondary btn-sm"><I.Filter size={13}/> BPM</button>
+          <button className="btn btn-secondary btn-sm"><I.Tag size={13}/> Etiquetas</button>
+          <button className="btn btn-secondary btn-sm"><I.Sort size={13}/> Más usadas</button>
+        </div>
+      </div>
+
+      {view === 'grid' ? (
+        <div className="grid grid-12 rise rise-d2">
+          {SEED.songs.map(s => (
+            <article key={s.id} className="col-3 card" style={{ overflow: 'hidden', cursor: 'pointer' }} onClick={onOpenSong}>
+              <div style={{
+                height: 100, background: 'linear-gradient(135deg, var(--accent-tint), var(--surface-3))',
+                position: 'relative', borderBottom: '1px solid var(--separator)',
+                display: 'flex', alignItems: 'flex-end', padding: 14,
+              }}>
+                <div className="display-serif" style={{ fontSize: 56, color: 'var(--accent)', lineHeight: 0.9 }}>{s.key}</div>
+                <div className="mono" style={{ marginLeft: 'auto', alignSelf: 'flex-start', fontSize: 11, color: 'var(--text-3)' }}>{s.bpm} bpm</div>
+              </div>
+              <div style={{ padding: 14 }}>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>{s.title}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>{s.author}</div>
+                <div className="row" style={{ gap: 6, marginTop: 10, fontSize: 11, color: 'var(--text-3)' }}>
+                  <I.Play size={11}/>
+                  <span className="mono">{s.plays} usos</span>
+                  <span style={{ marginLeft: 'auto' }} className="chip t-mono">{s.tags[0]}</span>
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="card rise rise-d2">
+          <table className="tbl">
             <thead>
               <tr>
-                <th style={s.planTh}>Próximas ocurrencias</th>
-                <th style={s.planTh}>Hora</th>
+                <th style={{ width: 36 }}></th>
+                <th>Canción</th><th>Autor</th><th>Tono</th><th>BPM</th>
+                <th>Etiquetas</th><th>Usos</th><th>Actualizada</th>
+                <th style={{ width: 60 }}></th>
               </tr>
             </thead>
             <tbody>
-              {next5.length === 0 && (
-                <tr><td colSpan={2} style={{ ...s.planTd, color: C.muted, fontSize: 12, textAlign: 'center', padding: '16px' }}>
-                  No hay ocurrencias futuras
-                </td></tr>
-              )}
-              {next5.map((o, i) => (
-                <tr key={i}>
-                  <td style={{ ...s.planTd, color: C.text, fontSize: 13 }}>{fmtDate(o.date)}</td>
-                  <td style={{ ...s.planTd, color: C.muted, fontSize: 12 }}>{o.start_time} – {o.end_time}</td>
+              {SEED.songs.map(s => (
+                <tr key={s.id} style={{ cursor: 'pointer' }} onClick={onOpenSong}>
+                  <td><button className="icon-btn" style={{ width: 28, height: 28 }}><I.Play size={12}/></button></td>
+                  <td>
+                    <div style={{ fontWeight: 600 }}>{s.title}</div>
+                    <div className="mono" style={{ fontSize: 11, color: 'var(--text-4)' }}>CCLI {s.ccli}</div>
+                  </td>
+                  <td style={{ color: 'var(--text-2)' }}>{s.author}</td>
+                  <td><span className="display-serif" style={{ fontSize: 18, color: 'var(--accent)' }}>{s.key}</span></td>
+                  <td className="num">{s.bpm}</td>
+                  <td>{s.tags.map(t => <span key={t} className="chip t-mono" style={{ marginRight: 4 }}>{t}</span>)}</td>
+                  <td className="num">{s.plays}</td>
+                  <td style={{ color: 'var(--text-3)', fontSize: 12 }}>{s.updated}</td>
+                  <td><button className="icon-btn"><I.Dots size={14}/></button></td>
                 </tr>
               ))}
             </tbody>
           </table>
-
-          {plans.length > 0 && (
-            <>
-              <div style={{ padding: '12px 16px 4px', fontSize: 11, fontWeight: 700, color: C.light, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Planes guardados</div>
-              <table style={s.planTable}>
-                <tbody>
-                  {plans.map(p => (
-                    <tr key={p.id}>
-                      <td style={{ ...s.planTd, color: C.muted, fontSize: 12 }}>{fmtDate(p.scheduled_at)}</td>
-                      <td style={s.planTd}>{p.title}</td>
-                      <td style={s.planTd}>
-                        <span style={{
-                          ...s.pill,
-                          background: p.status === 'published' ? C.successLight : C.soft,
-                          color: p.status === 'published' ? C.success : C.muted,
-                        }}>
-                          {p.status === 'draft' ? 'Borrador' : p.status === 'published' ? 'Publicado' : p.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </>
-          )}
         </div>
       )}
     </div>
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// AddPlanModal — quick add of a one-off plan instance
-// ─────────────────────────────────────────────────────────────────────────────
-function AddPlanModal({ slug, typeId, onCreated, onClose }: {
-  slug: string; typeId: string | null
-  onCreated: (p: ServicePlan) => void; onClose: () => void
-}) {
-  const [title, setTitle] = useState('')
-  const [date, setDate] = useState(nextSundayISO())
-  const [time, setTime] = useState('11:00')
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!title.trim()) { setErr('Título requerido'); return }
-    setBusy(true); setErr('')
-    try {
-      const res = await api(`/api/v1/tenant/${slug}/services/plans`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: title.trim(), scheduled_at: `${date}T${time}:00`, service_type_id: typeId }),
-      })
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.detail || 'Error') }
-      onCreated(await res.json())
-    } catch (e: any) { setErr(e.message); setBusy(false) }
-  }
-
+function CancionDetail({ onBack }: { onBack: () => void }) {
+  const s = SEED.songs[0]
   return (
-    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <form style={{ ...s.modal, width: 420 }} onSubmit={submit}>
-        <h3 style={s.modalTitle}>Añadir plan</h3>
-        <label style={s.label}>
-          Título
-          <input style={s.input} autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="p. ej. Servicio 24 mayo" />
-        </label>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <label style={s.label}>Fecha<input type="date" style={s.input} value={date} onChange={e => setDate(e.target.value)} /></label>
-          <label style={s.label}>Hora<input type="time" style={s.input} value={time} onChange={e => setTime(e.target.value)} /></label>
-        </div>
-        {err && <p style={s.errorText}>{err}</p>}
-        <div style={s.modalActions}>
-          <button type="button" style={s.btnGhost} onClick={onClose}>Cancelar</button>
-          <button type="submit" disabled={busy} style={s.btnPrimary}>{busy ? '…' : 'Crear'}</button>
-        </div>
-      </form>
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ListView — main Servicios screen
-// ─────────────────────────────────────────────────────────────────────────────
-function ListView({ slug, types, setTypes, teams }: {
-  slug: string
-  types: ServiceType[]
-  setTypes: React.Dispatch<React.SetStateAction<ServiceType[]>>
-  teams: Team[]
-}) {
-  const [plans, setPlans] = useState<ServicePlan[]>([])
-  const [occurrences, setOccurrences] = useState<Occurrence[]>([])
-  const [wizardOpen, setWizardOpen] = useState(false)
-  const [planForType, setPlanForType] = useState<string | null>(null)
-  const [masterOpen, setMasterOpen] = useState(false)
-
-  const refresh = useCallback(async () => {
-    const [p, o] = await Promise.all([
-      api(`/api/v1/tenant/${slug}/services/plans`).then(r => r.ok ? r.json() : []).catch(() => []),
-      api(`/api/v1/tenant/${slug}/services/occurrences`).then(r => r.ok ? r.json() : []).catch(() => []),
-    ])
-    setPlans(p); setOccurrences(o)
-  }, [slug])
-
-  useEffect(() => { refresh() }, [refresh])
-
-  async function deleteType(id: string) {
-    const res = await api(`/api/v1/tenant/${slug}/services/types/${id}`, { method: 'DELETE' })
-    if (res.ok) { setTypes(prev => prev.filter(t => t.id !== id)); refresh() }
-  }
-
-  function plansFor(typeId: string) { return plans.filter(p => p.service_type_id === typeId) }
-
-  return (
-    <>
-      <div data-tp="content" style={s.layout}>
-        <div data-tp="sidebar" style={s.sidebar}>
-          <MiniCalendar occurrences={occurrences} />
-          <button style={{ ...s.btnPrimary, justifyContent: 'center', width: '100%' }} onClick={() => setMasterOpen(true)}>
-            Calendario maestro
-          </button>
-          <div>
-            <div style={{ fontSize: 10, fontWeight: 700, color: C.light, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Próximos</div>
-            {occurrences.slice(0, 6).length === 0
-              ? <p style={{ fontSize: 12, color: C.light, margin: 0, lineHeight: 1.6 }}>Sin ocurrencias próximas.</p>
-              : occurrences.slice(0, 6).map((o, i) => (
-                  <div key={i} style={{ marginBottom: 10, display: 'flex', gap: 8 }}>
-                    <div style={{ width: 3, background: o.color || C.primary, borderRadius: 2, flexShrink: 0 }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>{fmtDateShort(o.date)} · {o.start_time}</div>
-                      <div style={{ fontSize: 12, color: C.text, lineHeight: 1.4 }}>{o.service_type_name}</div>
-                    </div>
-                  </div>
-                ))
-            }
+    <div className="content">
+      <div className="page-head rise">
+        <div style={{ flex: 1 }}>
+          <div className="row" style={{ gap: 8, marginBottom: 8 }}>
+            <button className="btn btn-ghost btn-sm" onClick={onBack}><I.ChevLeft size={13}/> Canciones</button>
+            <span className="chip t-accent"><I.Star size={11}/> Favorita</span>
+            <span className="chip t-mono">Adoración</span>
           </div>
+          <h1 className="page-title">{s.title}</h1>
+          <p className="page-sub">{s.author} · CCLI {s.ccli} · Última edición {s.updated}</p>
         </div>
-
-        <main style={s.main}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <h2 style={s.mainTitle}>Tipos de servicio</h2>
-            <button style={s.btnPrimary} onClick={() => setWizardOpen(true)}>+ Nuevo servicio</button>
-          </div>
-          {types.map(t => (
-            <ServiceTypeCard key={t.id}
-              type={t}
-              plans={plansFor(t.id)}
-              occurrences={occurrences}
-              onDelete={() => deleteType(t.id)}
-              onAddPlan={() => setPlanForType(t.id)}
-            />
-          ))}
-        </main>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn btn-secondary"><I.Heart size={14}/></button>
+          <button className="btn btn-secondary"><I.Edit size={14}/> Editar</button>
+          <button className="btn btn-primary"><I.Plus size={14}/> Añadir a servicio</button>
+        </div>
       </div>
 
-      {wizardOpen && (
-        <CreateTypeWizard slug={slug} teams={teams}
-          onCreated={t => { setTypes(prev => [...prev, t]); setWizardOpen(false); refresh() }}
-          onClose={() => setWizardOpen(false)} />
-      )}
-      {planForType && (
-        <AddPlanModal slug={slug} typeId={planForType}
-          onCreated={p => { setPlans(prev => [p, ...prev]); setPlanForType(null) }}
-          onClose={() => setPlanForType(null)} />
-      )}
-      {masterOpen && (
-        <MasterCalendarModal occurrences={occurrences} onClose={() => setMasterOpen(false)} />
-      )}
-    </>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// WelcomeView — empty state for Servicios tab
-// ─────────────────────────────────────────────────────────────────────────────
-function WelcomeView({ onCreate }: { onCreate: () => void }) {
-  return (
-    <main style={{ ...s.main, padding: 0, overflow: 'hidden', flex: 1 }}>
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40 }}>
-        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: '48px 40px', maxWidth: 580, width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 24, boxShadow: '0 1px 3px rgba(0,0,0,.06)' }}>
-          <div style={{ width: 72, height: 72, borderRadius: 20, background: C.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <svg viewBox="0 0 40 40" fill="none" width={36} height={36}>
-              <path d="M20 4L6 12v4h28v-4L20 4z" fill={C.primary} opacity=".9" />
-              <rect x="9" y="18" width="5" height="12" rx="1" fill={C.primaryMid} />
-              <rect x="18" y="18" width="5" height="12" rx="1" fill={C.primaryMid} />
-              <rect x="27" y="18" width="5" height="12" rx="1" fill={C.primaryMid} />
-              <rect x="6" y="30" width="29" height="3" rx="1" fill={C.primary} />
-            </svg>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center', textAlign: 'center' }}>
-            <h2 style={{ fontSize: 24, fontWeight: 700, color: C.text, margin: 0 }}>Bienvenido a Servicios</h2>
-            <p style={{ fontSize: 14, color: C.muted, margin: 0, lineHeight: 1.7, maxWidth: 420 }}>
-              Organiza y planifica cada servicio de tu iglesia. Empieza creando tu primer tipo de servicio.
-            </p>
-          </div>
-          <button style={{ ...s.btnPrimary, padding: '12px 24px', fontSize: 14 }} onClick={onCreate}>+ Crear primer servicio</button>
-        </div>
-      </div>
-    </main>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Personas — Teams CRUD section
-// ─────────────────────────────────────────────────────────────────────────────
-function TeamFormModal({ slug, initial, orgMembers, types, currentMemberId, onSaved, onClose }: {
-  slug: string
-  initial?: Team | null
-  orgMembers: OrgMemberLite[]
-  types: ServiceType[]
-  currentMemberId: string | null
-  onSaved: (t: Team) => void
-  onClose: () => void
-}) {
-  useEscape(onClose)
-  const [mode, setMode] = useState<'new' | 'copy'>('new')
-  const [name, setName] = useState(initial?.name || '')
-  const [color, setColor] = useState(initial?.color || '#4F46E5')
-  const [description, setDescription] = useState(initial?.description || '')
-  const [leaderIds, setLeaderIds] = useState<string[]>(
-    initial?.leader_member_ids?.length
-      ? initial.leader_member_ids
-      : (!initial && currentMemberId ? [currentMemberId] : [])
-  )
-  const [serviceTypeIds, setServiceTypeIds] = useState<string[]>(initial?.service_type_ids || [])
-  const [isRehearsal, setIsRehearsal] = useState(!!initial?.is_rehearsal)
-  const [isSecure, setIsSecure] = useState(!!initial?.is_secure)
-  const [isSplit, setIsSplit] = useState(!!initial?.is_split)
-  const [leaderQuery, setLeaderQuery] = useState('')
-  const [showLeaderPicker, setShowLeaderPicker] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
-
-  const leaderObjs = useMemo(() => leaderIds.map(id => orgMembers.find(m => m.id === id)).filter(Boolean) as OrgMemberLite[], [leaderIds, orgMembers])
-  const leaderCandidates = useMemo(() => {
-    const q = leaderQuery.trim().toLowerCase()
-    const taken = new Set(leaderIds)
-    return orgMembers
-      .filter(m => !taken.has(m.id) && (!q || (m.full_name || '').toLowerCase().includes(q) || m.email.toLowerCase().includes(q)))
-      .sort((a, b) => (a.full_name || a.email).toLowerCase().localeCompare((b.full_name || b.email).toLowerCase(), 'es'))
-      .slice(0, 8)
-  }, [orgMembers, leaderIds, leaderQuery])
-
-  function toggleType(id: string) {
-    setServiceTypeIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
-  }
-  function toggleAllTypes() {
-    setServiceTypeIds(prev => prev.length === types.length ? [] : types.map(t => t.id))
-  }
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!name.trim()) { setErr('Nombre requerido'); return }
-    setBusy(true); setErr('')
-    try {
-      const url = initial
-        ? `/api/v1/tenant/${slug}/teams/${initial.id}`
-        : `/api/v1/tenant/${slug}/teams`
-      const res = await api(url, {
-        method: initial ? 'PATCH' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: name.trim(),
-          color,
-          description,
-          is_rehearsal: isRehearsal,
-          is_secure: isSecure,
-          is_split: isSplit,
-          leader_member_ids: leaderIds,
-          service_type_ids: serviceTypeIds,
-        }),
-      })
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.detail || 'Error') }
-      onSaved(await res.json())
-    } catch (e: any) { setErr(e.message); setBusy(false) }
-  }
-
-  const flagCard = (active: boolean, onToggle: () => void, icon: string, title: string, desc: string) => (
-    <div onClick={onToggle}
-      style={{
-        border: `1px solid ${active ? C.primary : C.border}`,
-        background: active ? 'rgba(79,70,229,0.04)' : C.surface,
-        borderRadius: 10, padding: 12, cursor: 'pointer',
-        display: 'flex', gap: 10, alignItems: 'flex-start',
-      }}>
-      <div style={{
-        width: 18, height: 18, borderRadius: 4, border: `1px solid ${active ? C.primary : C.border}`,
-        background: active ? C.primary : 'transparent', flexShrink: 0, marginTop: 2,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 12, fontWeight: 700,
-      }}>{active ? '✓' : ''}</div>
-      <div style={{ flex: 1 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-          <span style={{ fontSize: 16 }}>{icon}</span>
-          <span style={{ fontWeight: 600, fontSize: 13, color: C.text }}>{title}</span>
-        </div>
-        <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.4 }}>{desc}</div>
-      </div>
-    </div>
-  )
-
-  return (
-    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <form style={{ ...s.modal, width: 560, maxHeight: '90vh', overflowY: 'auto' }} onSubmit={submit}>
-        <h3 style={s.modalTitle}>{initial ? 'Editar equipo' : 'Añadir equipo'}</h3>
-
-        {!initial && (
-          <div style={{ display: 'flex', gap: 0, marginBottom: 14, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden', width: 'fit-content' }}>
-            <button type="button" onClick={() => setMode('new')}
-              style={{ padding: '6px 16px', fontSize: 13, border: 'none', cursor: 'pointer',
-                background: mode === 'new' ? C.primary : 'transparent',
-                color: mode === 'new' ? 'white' : C.text, fontWeight: 600 }}>Nuevo</button>
-            <button type="button" disabled title="Próximamente"
-              style={{ padding: '6px 16px', fontSize: 13, border: 'none',
-                background: 'transparent', color: C.light, cursor: 'not-allowed', fontWeight: 500 }}>Copiar</button>
-          </div>
-        )}
-
-        <label style={s.label}>
-          Nombre del equipo
-          <input style={s.input} autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="p. ej. Equipo de Adoración" />
-        </label>
-
-        <label style={s.label}>
-          Color
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input type="color" value={color} onChange={e => setColor(e.target.value)}
-              style={{ width: 44, height: 38, border: `1px solid ${C.border}`, borderRadius: 8, padding: 2, cursor: 'pointer' }} />
-            <span style={{ fontSize: 12, color: C.muted, fontFamily: 'monospace' }}>{color}</span>
-          </div>
-        </label>
-
-        <div style={s.label}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>Líderes del equipo</span>
-            <span style={{ fontSize: 11, color: C.muted, fontWeight: 400 }}>{leaderObjs.length} seleccionado{leaderObjs.length === 1 ? '' : 's'}</span>
-          </div>
-          <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: 8, minHeight: 44, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-            {leaderObjs.map(m => (
-              <span key={m.id} style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-                background: C.soft, borderRadius: 999, padding: '4px 10px', fontSize: 12, color: C.text,
-              }}>
-                {m.full_name || m.email}
-                <button type="button" onClick={() => setLeaderIds(prev => prev.filter(x => x !== m.id))}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, padding: 0, fontSize: 14, lineHeight: 1 }}>×</button>
-              </span>
-            ))}
-            <div style={{ position: 'relative', flex: '1 1 120px', minWidth: 120 }}>
-              <input
-                value={leaderQuery}
-                onChange={e => { setLeaderQuery(e.target.value); setShowLeaderPicker(true) }}
-                onFocus={() => setShowLeaderPicker(true)}
-                onBlur={() => setTimeout(() => setShowLeaderPicker(false), 150)}
-                placeholder={leaderObjs.length ? 'Añadir otro…' : 'Buscar persona…'}
-                style={{ width: '100%', border: 'none', outline: 'none', fontSize: 13, padding: '4px 2px', background: 'transparent' }}
-              />
-              {showLeaderPicker && leaderCandidates.length > 0 && (
-                <div style={{
-                  position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, zIndex: 10,
-                  background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
-                  boxShadow: '0 6px 20px rgba(0,0,0,0.08)', maxHeight: 220, overflowY: 'auto',
-                }}>
-                  {leaderCandidates.map(m => (
-                    <div key={m.id}
-                      onMouseDown={e => { e.preventDefault(); setLeaderIds(prev => [...prev, m.id]); setLeaderQuery('') }}
-                      style={{ padding: '8px 10px', cursor: 'pointer', fontSize: 13, color: C.text, display: 'flex', flexDirection: 'column', gap: 1 }}
-                      onMouseEnter={e => (e.currentTarget.style.background = C.soft)}
-                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                      <span style={{ fontWeight: 500 }}>{m.full_name || '—'}</span>
-                      <span style={{ fontSize: 11, color: C.muted }}>{m.email}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
+      <div className="grid grid-12 rise rise-d1">
+        <section className="col-8 card">
+          <div style={{
+            padding: '28px 24px',
+            background: 'linear-gradient(135deg, var(--accent-tint), transparent), var(--surface-2)',
+            borderBottom: '1px solid var(--separator)',
+            display: 'flex', alignItems: 'center', gap: 22,
+          }}>
+            <div style={{
+              width: 92, height: 92, borderRadius: 18,
+              background: 'var(--surface)', border: '1px solid var(--separator)',
+              display: 'grid', placeItems: 'center', boxShadow: 'var(--shadow-2)',
+            }}>
+              <div className="display-serif" style={{ fontSize: 64, color: 'var(--accent)', lineHeight: 1 }}>{s.key}</div>
             </div>
-          </div>
-        </div>
-
-        <div style={s.label}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>Tipos de servicio</span>
-            {types.length > 0 && (
-              <button type="button" onClick={toggleAllTypes}
-                style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, cursor: 'pointer', fontWeight: 500, padding: 0 }}>
-                {serviceTypeIds.length === types.length ? 'Quitar todos' : 'Seleccionar todos'}
+            <div style={{ flex: 1 }}>
+              <div className="row" style={{ gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div>
+                  <div className="mono" style={{ fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>Tono</div>
+                  <div className="row" style={{ gap: 6, marginTop: 4 }}>
+                    <button className="btn btn-secondary btn-sm" style={{ minWidth: 28, padding: 0, height: 28, justifyContent: 'center' }}>−</button>
+                    <div className="display-serif" style={{ fontSize: 30, minWidth: 30, textAlign: 'center', lineHeight: 1 }}>{s.key}</div>
+                    <button className="btn btn-secondary btn-sm" style={{ minWidth: 28, padding: 0, height: 28, justifyContent: 'center' }}>+</button>
+                  </div>
+                </div>
+                <div>
+                  <div className="mono" style={{ fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>BPM</div>
+                  <div className="display-serif" style={{ fontSize: 30, lineHeight: 1, marginTop: 4 }}>{s.bpm}</div>
+                </div>
+                <div>
+                  <div className="mono" style={{ fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>Duración</div>
+                  <div className="display-serif" style={{ fontSize: 30, lineHeight: 1, marginTop: 4 }}>4:38</div>
+                </div>
+                <div>
+                  <div className="mono" style={{ fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>Compás</div>
+                  <div className="display-serif" style={{ fontSize: 30, lineHeight: 1, marginTop: 4 }}>4/4</div>
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
+              <button className="btn btn-primary btn-lg" style={{ width: 56, height: 56, padding: 0, borderRadius: '50%', justifyContent: 'center' }}>
+                <I.Play size={20}/>
               </button>
-            )}
-          </div>
-          {types.length === 0 ? (
-            <div style={{ fontSize: 12, color: C.muted, padding: '8px 4px' }}>No hay tipos de servicio aún.</div>
-          ) : (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {types.map(t => {
-                const active = serviceTypeIds.includes(t.id)
-                return (
-                  <button key={t.id} type="button" onClick={() => toggleType(t.id)}
-                    style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 6,
-                      padding: '5px 12px', borderRadius: 999, fontSize: 12, cursor: 'pointer',
-                      border: `1px solid ${active ? C.primary : C.border}`,
-                      background: active ? 'rgba(79,70,229,0.08)' : C.surface,
-                      color: active ? C.primary : C.text, fontWeight: active ? 600 : 500,
-                    }}>
-                    <span style={{ width: 8, height: 8, borderRadius: 2, background: t.color || C.primary, flexShrink: 0 }} />
-                    {t.name}
-                  </button>
-                )
-              })}
-            </div>
-          )}
-        </div>
-
-        <div style={s.label}>
-          <span>Tipo de equipo</span>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {flagCard(isRehearsal, () => setIsRehearsal(v => !v), '🎵',
-              'Equipo de ensayo',
-              'Acceso a canciones, partituras y media del servicio asignado.')}
-            {flagCard(isSecure, () => setIsSecure(v => !v), '🛡️',
-              'Equipo seguro',
-              'Sólo personas con verificación de antecedentes podrán ser asignadas.')}
-            {flagCard(isSplit, () => setIsSplit(v => !v), '⏱️',
-              'Equipo dividido',
-              'Permite distintas personas por franja cuando hay varios servicios el mismo día.')}
-          </div>
-        </div>
-
-        <label style={s.label}>
-          Descripción
-          <textarea value={description} onChange={e => setDescription(e.target.value)}
-            placeholder="Opcional: rol del equipo en el servicio"
-            style={{ ...s.input, minHeight: 60, resize: 'vertical' as const, fontFamily: 'inherit' }} />
-        </label>
-
-        {err && <p style={s.errorText}>{err}</p>}
-        <div style={s.modalActions}>
-          <button type="button" style={s.btnGhost} onClick={onClose}>Cancelar</button>
-          <button type="submit" disabled={busy} style={s.btnPrimary}>{busy ? '…' : initial ? 'Guardar' : 'Crear equipo'}</button>
-        </div>
-      </form>
-    </div>
-  )
-}
-
-// ── Service People types ────────────────────────────────────────────────────
-type ServiceRole = 'administrator' | 'editor' | 'coordinator' | 'viewer' | 'scheduled_viewer'
-type AreaRole = 'administrator' | 'editor' | 'viewer' | 'scheduled_viewer'
-
-interface OrgMemberLite { id: string; full_name: string | null; email: string; avatar?: string | null; role?: string }
-interface TypePerm { service_type_id: string; role: ServiceRole | null }
-interface ServicePerson {
-  id: string
-  member_id: string
-  full_name: string | null
-  email: string
-  avatar: string | null
-  org_role: string
-  service_role: ServiceRole
-  songs_role: AreaRole | null
-  media_role: AreaRole | null
-  file_access: { plans: boolean; songs: boolean; media: boolean }
-  type_permissions: TypePerm[]
-  welcomed_at: string | null
-  password_set: boolean
-  is_active?: boolean
-  scheduling?: { max_per_month: number | null; max_per_day: number | null }
-  signature?: { text: string | null; image: string | null }
-  preferred_notif_app?: 'servicios' | 'worsyn'
-  temp_password?: string
-  debug_password?: string | null   // TEST-ONLY — remove before prod
-}
-
-type EmailKind = 'general' | 'schedule' | 'signup' | 'welcome' | 'team_welcome'
-interface EmailTemplate {
-  id: string; kind: EmailKind; name: string; subject: string; body: string;
-  is_default: boolean; created_at: string; updated_at: string | null
-}
-interface EmailMessage {
-  id: string; direction: 'sent' | 'received'; status: string;
-  subject: string; body: string;
-  recipient_email: string; sender_email: string | null;
-  recipient_member_id: string | null; sender_member_id: string | null;
-  template_id: string | null;
-  sent_at: string | null; created_at: string; error: string | null;
-  counterparty_name: string | null;
-}
-
-const KIND_LABEL: Record<EmailKind, string> = {
-  general: 'General', schedule: 'Programación', signup: 'Hojas de inscripción',
-  welcome: 'Bienvenida', team_welcome: 'Bienvenida a equipo',
-}
-const KIND_HINT: Record<EmailKind, string> = {
-  general: 'Mensajes generales (no asociados a un plan o fecha).',
-  schedule: 'Asociados a planes o al cuadrante. Llevan botones de Aceptar / Rechazar.',
-  signup: 'Para hojas de inscripción y reclutamiento.',
-  welcome: 'Bienvenida al portal — se envía al añadir una persona nueva.',
-  team_welcome: 'Bienvenida a un equipo — se envía cuando un miembro existente entra a un equipo nuevo.',
-}
-
-// Common variables exposed by the picker. Full catalog → artifacts/EMAIL-VARIABLES.md
-const VARIABLE_GROUPS: { label: string; vars: { token: string; hint: string }[] }[] = [
-  { label: 'Destinatario', vars: [
-    { token: '{{ to.name }}', hint: 'Nombre completo de la persona' },
-    { token: '{{ to.first_name }}', hint: 'Solo el primer nombre' },
-    { token: '{{ to.last_name }}', hint: 'Primer apellido' },
-    { token: '{{ to.email }}', hint: 'Correo electrónico' },
-    { token: '{{ to.service_role }}', hint: 'Rol en Servicios (texto en ES)' },
-    { token: '{{ to.max_plan_permissions_s }}', hint: 'Alias compatible PCO (= service_role)' },
-    { token: '{{ to.login_method }}', hint: 'Método de inicio de sesión' },
-  ]},
-  { label: 'Remitente', vars: [
-    { token: '{{ from.name }}', hint: 'Nombre del remitente' },
-    { token: '{{ from.first_name }}', hint: 'Primer nombre del remitente' },
-    { token: '{{ from.signature }}', hint: 'Firma configurada del remitente' },
-  ]},
-  { label: 'Organización', vars: [
-    { token: '{{ organization.name }}', hint: 'Nombre de la iglesia' },
-    { token: '{{ organization.alias }}', hint: 'Alias del portal' },
-    { token: '{{ organization.email }}', hint: 'Email de contacto de la organización' },
-  ]},
-  { label: 'Condicionales', vars: [
-    { token: '{% if to.has_password %}...{% else %}...{% endif %}', hint: 'Bloque solo si la persona ya tiene contraseña' },
-    { token: '{% if to.scheduler_at_all? %}...{% endif %}', hint: 'Bloque solo si puede coordinar/programar' },
-  ]},
-]
-
-interface PersonTeam { membership_id: string; team_id: string; team_name: string; team_color: string | null; role: string | null }
-
-const SERVICE_ROLE_LABEL: Record<ServiceRole, string> = {
-  administrator: 'Administrador',
-  editor: 'Editor',
-  coordinator: 'Coordinador',
-  viewer: 'Visualizador',
-  scheduled_viewer: 'Visualizador Agendado',
-}
-const AREA_ROLE_LABEL: Record<AreaRole, string> = {
-  administrator: 'Administrador',
-  editor: 'Editor',
-  viewer: 'Visualizador',
-  scheduled_viewer: 'Visualizador Agendado',
-}
-const SERVICE_ROLE_DESC: Record<ServiceRole, string> = {
-  administrator: 'Control total: añadir, editar y eliminar personas, tipos y planes.',
-  editor: 'Edita servicios y planes. No puede eliminar personas ni añadir nuevas.',
-  coordinator: 'Coordina los planes de un tipo de servicio. No crea ni elimina tipos.',
-  viewer: 'Solo lectura. Ve todos los servicios sin realizar cambios.',
-  scheduled_viewer: 'Solo lectura de los servicios que le hayan sido asignados.',
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// AddPersonWizard — multi-step modal (person → permissions → welcome)
-// ─────────────────────────────────────────────────────────────────────────────
-function AddPersonWizard({ slug, types, orgMembers, existingMemberIds, onCreated, onClose }: {
-  slug: string
-  types: ServiceType[]
-  orgMembers: OrgMemberLite[]
-  existingMemberIds: Set<string>
-  onCreated: (p: ServicePerson) => void
-  onClose: () => void
-}) {
-  const [step, setStep] = useState<1 | 2 | 3>(1)
-  const [direction, setDirection] = useState<'forward' | 'back'>('forward')
-  const [mode, setMode] = useState<'existing' | 'new'>('existing')
-  const [pickedId, setPickedId] = useState<string | null>(null)
-  const [pickerSearch, setPickerSearch] = useState('')
-  const [newName, setNewName] = useState('')
-  const [newEmail, setNewEmail] = useState('')
-  const [newPhone, setNewPhone] = useState('')
-  const [serviceRole, setServiceRole] = useState<ServiceRole>('viewer')
-  const [songsRole, setSongsRole] = useState<AreaRole>('viewer')
-  const [mediaRole, setMediaRole] = useState<AreaRole>('viewer')
-  const [filePlans, setFilePlans] = useState(true)
-  const [fileSongs, setFileSongs] = useState(true)
-  const [fileMedia, setFileMedia] = useState(true)
-  const [typeOverrides, setTypeOverrides] = useState<Record<string, ServiceRole | null>>({})
-  const [sendWelcome, setSendWelcome] = useState(true)
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
-  const [createdTempPassword, setCreatedTempPassword] = useState<string | null>(null)
-  useEscape(onClose)
-
-  const availableMembers = useMemo(() => {
-    const q = pickerSearch.trim().toLowerCase()
-    return orgMembers
-      .filter(m => !existingMemberIds.has(m.id))
-      .filter(m => !q || (m.full_name || '').toLowerCase().includes(q) || m.email.toLowerCase().includes(q))
-      .slice(0, 40)
-  }, [orgMembers, existingMemberIds, pickerSearch])
-
-  // Picked org member's role (only meaningful in 'existing' mode)
-  const pickedRole = useMemo(() => {
-    if (mode !== 'existing' || !pickedId) return undefined
-    return orgMembers.find(m => m.id === pickedId)?.role
-  }, [mode, pickedId, orgMembers])
-  const pickedIsAdmin = pickedRole === 'admin'
-
-  function next() {
-    setErr('')
-    if (step === 1) {
-      if (mode === 'existing' && !pickedId) { setErr('Selecciona una persona'); return }
-      if (mode === 'new') {
-        if (!newName.trim()) { setErr('Indica el nombre'); return }
-        if (!newEmail.trim() || !newEmail.includes('@')) { setErr('Email inválido'); return }
-      }
-      setDirection('forward'); setStep(2)
-    } else if (step === 2) {
-      setDirection('forward'); setStep(3)
-    }
-  }
-  function back() { setErr(''); if (step > 1) { setDirection('back'); setStep((step - 1) as 1 | 2) } }
-
-  async function submit() {
-    setBusy(true); setErr('')
-    try {
-      const type_permissions = Object.entries(typeOverrides)
-        .map(([service_type_id, role]) => ({ service_type_id, role }))
-      const body: any = {
-        service_role: serviceRole, songs_role: songsRole, media_role: mediaRole,
-        file_access: { plans: filePlans, songs: fileSongs, media: fileMedia },
-        type_permissions,
-        send_welcome: sendWelcome,
-      }
-      if (mode === 'existing') body.member_id = pickedId
-      else body.new_member = { full_name: newName.trim(), email: newEmail.trim().toLowerCase(), phone: newPhone.trim() || null }
-
-      const res = await api(`/api/v1/tenant/${slug}/services/people`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.detail || 'Error') }
-      const created = await res.json() as ServicePerson
-      onCreated(created)
-      // Always show a final screen so the admin sees the temp password (test-mode)
-      // or at least confirmation. Falls back to debug_password if temp wasn't returned
-      // (e.g. existing member who already had a password — admin can reset later).
-      const pw = created.temp_password || created.debug_password
-      if (pw) setCreatedTempPassword(pw)
-      else onClose()
-    } catch (e: any) { setErr(e.message); setBusy(false) }
-  }
-
-  // Inject slide keyframes once (cheap & contained to this module).
-  useEffect(() => {
-    const id = 'worsyn-wizard-slide'
-    if (document.getElementById(id)) return
-    const el = document.createElement('style')
-    el.id = id
-    el.textContent = `
-@keyframes worsyn-slide-fwd { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
-@keyframes worsyn-slide-bwd { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
-`
-    document.head.appendChild(el)
-  }, [])
-
-  // When the picked person is an org admin, disable welcome (they use the
-  // tenant-level password). Reset the toggle as soon as that becomes true.
-  useEffect(() => { if (pickedIsAdmin) setSendWelcome(false) }, [pickedIsAdmin])
-
-  const StepDot = ({ n, label }: { n: number; label: string }) => {
-    const active = step === n; const done = step > n
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: done || active ? 1 : 0.5 }}>
-        <span style={{ ...s.stepDot, background: active ? C.primary : done ? C.success : C.soft, color: active || done ? '#fff' : C.muted }}>
-          {done ? '✓' : n}
-        </span>
-        <span style={{ fontSize: 12, fontWeight: 600, color: active ? C.text : C.muted }}>{label}</span>
-      </div>
-    )
-  }
-
-  const stepAnim: React.CSSProperties = {
-    animation: `${direction === 'forward' ? 'worsyn-slide-fwd' : 'worsyn-slide-bwd'} 220ms ease`,
-    display: 'flex', flexDirection: 'column', gap: 14,
-  }
-
-  if (createdTempPassword) {
-    return (
-      <div style={s.overlay}>
-        <div style={{ ...s.modal, width: 460 }}>
-          <h3 style={s.modalTitle}>Persona añadida</h3>
-          <p style={{ fontSize: 13, color: C.muted, margin: 0, lineHeight: 1.6 }}>
-            Se ha generado una contraseña temporal. <strong style={{ color: C.text }}>Cópiala ahora</strong> y compártela con la persona — no se mostrará otra vez.
-            <br/><em>Próximamente: envío automático por email.</em>
-          </p>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: C.primaryLight, border: `1.5px solid ${C.primary}`, borderRadius: 10, padding: '14px 16px' }}>
-            <code style={{ flex: 1, fontSize: 16, fontFamily: 'monospace', fontWeight: 700, color: C.primary, letterSpacing: '0.08em' }}>{createdTempPassword}</code>
-            <button style={{ ...s.btnPrimary, padding: '6px 12px', fontSize: 12 }}
-              onClick={() => navigator.clipboard?.writeText(createdTempPassword)}>Copiar</button>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button style={s.btnPrimary} onClick={onClose}>Listo</button>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={{ ...s.modal, width: 620 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <h3 style={s.modalTitle}>Añadir persona</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: C.muted, lineHeight: 1 }}>✕</button>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '4px 0 8px', borderBottom: `1px solid ${C.border}` }}>
-          <StepDot n={1} label="Persona" />
-          <span style={{ flex: 1, height: 1, background: C.border }} />
-          <StepDot n={2} label="Permisos" />
-          <span style={{ flex: 1, height: 1, background: C.border }} />
-          <StepDot n={3} label="Bienvenida" />
-        </div>
-
-        <div style={{ flex: 1, overflowY: 'auto', padding: '4px 2px 0', overflowX: 'hidden' }}>
-        <div key={step} style={stepAnim}>
-          {step === 1 && (
-            <>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button onClick={() => setMode('existing')}
-                  style={{
-                    flex: 1, padding: '12px 16px', borderRadius: 10, cursor: 'pointer', textAlign: 'left',
-                    border: `1.5px solid ${mode === 'existing' ? C.primary : C.border}`,
-                    background: mode === 'existing' ? C.primaryLight : '#fff',
-                  }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Persona existente</div>
-                  <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>Elige a alguien del módulo Miembros</div>
-                </button>
-                <button onClick={() => setMode('new')}
-                  style={{
-                    flex: 1, padding: '12px 16px', borderRadius: 10, cursor: 'pointer', textAlign: 'left',
-                    border: `1.5px solid ${mode === 'new' ? C.primary : C.border}`,
-                    background: mode === 'new' ? C.primaryLight : '#fff',
-                  }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Crear nueva</div>
-                  <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>Se añade también a Miembros</div>
-                </button>
-              </div>
-
-              {mode === 'existing' && (
-                <>
-                  <input style={s.input} placeholder="Buscar por nombre o email…"
-                    value={pickerSearch} onChange={e => setPickerSearch(e.target.value)} autoFocus />
-                  <div style={{ maxHeight: 280, overflowY: 'auto', border: `1px solid ${C.border}`, borderRadius: 10 }}>
-                    {availableMembers.length === 0 && (
-                      <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>
-                        {orgMembers.length === existingMemberIds.size
-                          ? 'Todos los miembros ya están en Servicios. Crea uno nuevo.'
-                          : 'Sin resultados.'}
-                      </div>
-                    )}
-                    {availableMembers.map(m => {
-                      const selected = pickedId === m.id
-                      return (
-                        <button key={m.id} onClick={() => setPickedId(m.id)}
-                          style={{
-                            display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', width: '100%',
-                            background: selected ? C.primaryLight : 'transparent',
-                            border: 'none', borderBottom: `1px solid ${C.soft}`,
-                            cursor: 'pointer', textAlign: 'left',
-                          }}>
-                          <div style={{ width: 32, height: 32, borderRadius: 999, background: m.avatar ? `url(${m.avatar}) center/cover` : C.soft, color: C.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
-                            {!m.avatar && (m.full_name?.[0]?.toUpperCase() || m.email[0]?.toUpperCase())}
-                          </div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.full_name || '—'}</div>
-                            <div style={{ fontSize: 11, color: C.muted }}>{m.email}</div>
-                          </div>
-                          {selected && <span style={{ color: C.primary, fontWeight: 700 }}>✓</span>}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </>
-              )}
-
-              {mode === 'new' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <label style={s.label}>Nombre completo<input style={s.input} value={newName} onChange={e => setNewName(e.target.value)} autoFocus /></label>
-                  <label style={s.label}>Email<input style={s.input} type="email" value={newEmail} onChange={e => setNewEmail(e.target.value)} placeholder="persona@iglesia.com" /></label>
-                  <label style={s.label}>Teléfono <span style={{ color: C.muted, fontWeight: 400 }}>(opcional)</span>
-                    <input style={s.input} value={newPhone} onChange={e => setNewPhone(e.target.value)} placeholder="+34 612 345 678" /></label>
-                  <p style={{ fontSize: 11, color: C.muted, margin: 0, fontStyle: 'italic' }}>
-                    * Se crea también un miembro en el módulo Miembros con rol "Miembro".
-                  </p>
-                </div>
-              )}
-            </>
-          )}
-
-          {step === 2 && (
-            <>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8 }}>Personas y Planes</div>
-                <select style={s.select} value={serviceRole} onChange={e => setServiceRole(e.target.value as ServiceRole)}>
-                  {(['administrator', 'editor', 'coordinator', 'viewer', 'scheduled_viewer'] as ServiceRole[]).map(r => (
-                    <option key={r} value={r}>{SERVICE_ROLE_LABEL[r]}</option>
-                  ))}
-                </select>
-                <p style={{ fontSize: 11, color: C.muted, margin: '6px 0 0', lineHeight: 1.5 }}>{SERVICE_ROLE_DESC[serviceRole]}</p>
-              </div>
-
-              {types.length > 0 && (
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>Acceso por tipo de servicio</div>
-                  <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden' }}>
-                    {types.map(t => {
-                      const current = typeOverrides[t.id]
-                      const sel = current === undefined ? '__inherit__' : (current === null ? '__same__' : current)
-                      return (
-                        <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderBottom: `1px solid ${C.soft}` }}>
-                          <div style={{ width: 8, height: 8, borderRadius: 2, background: t.color || C.primary, flexShrink: 0 }} />
-                          <div style={{ flex: 1, fontSize: 13, color: C.text, fontWeight: 500 }}>{t.name}</div>
-                          <select style={{ ...s.select, padding: '5px 8px', fontSize: 12 }}
-                            value={sel}
-                            onChange={e => {
-                              const v = e.target.value
-                              setTypeOverrides(prev => {
-                                const n = { ...prev }
-                                if (v === '__inherit__') delete n[t.id]
-                                else if (v === '__same__') n[t.id] = null
-                                else n[t.id] = v as ServiceRole
-                                return n
-                              })
-                            }}>
-                            <option value="__inherit__">Mismo que arriba</option>
-                            {(['administrator', 'editor', 'coordinator', 'viewer', 'scheduled_viewer'] as ServiceRole[]).map(r => (
-                              <option key={r} value={r}>{SERVICE_ROLE_LABEL[r]}</option>
-                            ))}
-                          </select>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8 }}>Canciones</div>
-                  <select style={s.select} value={songsRole} onChange={e => setSongsRole(e.target.value as AreaRole)}>
-                    {(['administrator', 'editor', 'viewer', 'scheduled_viewer'] as AreaRole[]).map(r => (
-                      <option key={r} value={r}>{AREA_ROLE_LABEL[r]}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8 }}>Media</div>
-                  <select style={s.select} value={mediaRole} onChange={e => setMediaRole(e.target.value as AreaRole)}>
-                    {(['administrator', 'editor', 'viewer', 'scheduled_viewer'] as AreaRole[]).map(r => (
-                      <option key={r} value={r}>{AREA_ROLE_LABEL[r]}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8 }}>Acceso a Ficheros</div>
-                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                  {[
-                    { v: filePlans, set: setFilePlans, label: 'Planes (servicios)' },
-                    { v: fileSongs, set: setFileSongs, label: 'Canciones' },
-                    { v: fileMedia, set: setFileMedia, label: 'Media' },
-                  ].map((it, i) => (
-                    <label key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: C.text, cursor: 'pointer' }}>
-                      <input type="checkbox" checked={it.v} onChange={e => it.set(e.target.checked)} />
-                      {it.label}
-                    </label>
-                  ))}
-                </div>
-                <p style={{ fontSize: 11, color: C.muted, margin: '6px 0 0', lineHeight: 1.5 }}>
-                  Permite ver y descargar los archivos adjuntos correspondientes a cada sección.
-                </p>
-              </div>
-            </>
-          )}
-
-          {step === 3 && (
-            <>
-              {pickedIsAdmin ? (
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '14px 16px', border: `1px solid ${C.border}`, borderRadius: 10, background: C.successLight }}>
-                  <svg viewBox="0 0 20 20" fill={C.success} width={22} height={22} style={{ flexShrink: 0, marginTop: 1 }}>
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"/>
-                  </svg>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>No requiere bienvenida</div>
-                    <div style={{ fontSize: 12, color: C.muted, marginTop: 4, lineHeight: 1.6 }}>
-                      Esta persona es <strong style={{ color: C.text }}>Administrador de la organización</strong>.
-                      Ya tiene una contraseña a nivel de tenant y accede al portal con ella.
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <p style={{ fontSize: 13, color: C.muted, margin: 0, lineHeight: 1.7 }}>
-                    Las personas dadas de alta en Servicios necesitan una contraseña para entrar al portal.
-                    Activa el envío de bienvenida para generar una contraseña temporal automáticamente.
-                  </p>
-                  <label style={{
-                    display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px',
-                    border: `1.5px solid ${sendWelcome ? C.primary : C.border}`, borderRadius: 10,
-                    background: sendWelcome ? C.primaryLight : '#fff', cursor: 'pointer',
-                  }}>
-                    <input type="checkbox" checked={sendWelcome} onChange={e => setSendWelcome(e.target.checked)} />
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Enviar mensaje de bienvenida</div>
-                      <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
-                        Genera una contraseña temporal y marca como "bienvenida enviada".
-                      </div>
-                    </div>
-                  </label>
-                  <p style={{ fontSize: 11, color: C.muted, margin: 0, fontStyle: 'italic' }}>
-                    * Email SMTP aún no conectado. La contraseña se mostrará en pantalla para compartirla manualmente.
-                  </p>
-                </>
-              )}
-            </>
-          )}
-          {err && <p style={s.errorText}>{err}</p>}
-        </div>
-        </div>
-
-        <div style={s.modalActions}>
-          <button onClick={step === 1 ? onClose : back} style={s.btnGhost}>
-            {step === 1 ? 'Cancelar' : '‹ Atrás'}
-          </button>
-          {step < 3
-            ? <button onClick={next} style={s.btnPrimary}>Siguiente ›</button>
-            : <button onClick={submit} disabled={busy} style={s.btnPrimary}>{busy ? 'Guardando…' : 'Añadir persona'}</button>}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Blockouts — types + modal + projection
-// ─────────────────────────────────────────────────────────────────────────────
-type RepeatKind = 'none' | 'day' | 'week' | 'month' | 'year'
-interface Blockout {
-  id: string
-  start_date: string  // YYYY-MM-DD
-  end_date: string
-  all_day: boolean
-  repeat_kind: RepeatKind
-  repeat_interval: number
-  repeat_until: string | null  // null = forever
-  reason: string | null
-}
-
-const REPEAT_KIND_LABEL: Record<RepeatKind, string> = {
-  none: 'No se repite', day: 'día', week: 'semana', month: 'mes', year: 'año',
-}
-// "Cada" / "Cada dos" / "Cada tres" … up to "Cada doce". Index 0 unused.
-const CADA_LABEL = [
-  '—', 'Cada', 'Cada dos', 'Cada tres', 'Cada cuatro', 'Cada cinco',
-  'Cada seis', 'Cada siete', 'Cada ocho', 'Cada nueve', 'Cada diez',
-  'Cada once', 'Cada doce',
-]
-
-function blockoutLabel(b: Blockout): string {
-  const same = b.start_date === b.end_date
-  const range = same ? fmtDate(b.start_date) : `${fmtDate(b.start_date)} — ${fmtDate(b.end_date)}`
-  if (b.repeat_kind === 'none') return range
-  const cada = CADA_LABEL[b.repeat_interval] || 'Cada'
-  const unit = REPEAT_KIND_LABEL[b.repeat_kind]
-  const tail = b.repeat_until ? `hasta ${fmtDate(b.repeat_until)}` : 'siempre'
-  return `${range} · ${cada} ${unit} ${tail}`
-}
-
-function BlockoutModal({ slug, smId, initial, onSaved, onClose }: {
-  slug: string
-  smId: string
-  initial?: Blockout
-  onSaved: (b: Blockout) => void
-  onClose: () => void
-}) {
-  const today = new Date().toISOString().slice(0, 10)
-  const [startDate, setStartDate] = useState(initial?.start_date || today)
-  const [endDate, setEndDate]     = useState(initial?.end_date   || today)
-  const [allDay, setAllDay]       = useState(initial?.all_day ?? true)
-  const [repeatKind, setRepeatKind]         = useState<RepeatKind>(initial?.repeat_kind || 'none')
-  const [repeatInterval, setRepeatInterval] = useState<number>(initial?.repeat_interval || 1)
-  const [untilMode, setUntilMode] = useState<'forever' | 'until'>(initial?.repeat_until ? 'until' : 'forever')
-  const [repeatUntil, setRepeatUntil] = useState<string>(initial?.repeat_until || today)
-  const [reason, setReason] = useState(initial?.reason || '')
-  const [busy, setBusy] = useState(false)
-  const [err, setErr]   = useState('')
-  useEscape(onClose)
-
-  // Selection during calendar interaction
-  const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d })
-  const yr = cursor.getFullYear(), mo = cursor.getMonth()
-  const firstDOW = new Date(yr, mo, 1).getDay()
-  const offset = firstDOW === 0 ? 6 : firstDOW - 1
-  const daysInMo = new Date(yr, mo + 1, 0).getDate()
-  const cells = [...Array(offset).fill(null), ...Array.from({ length: daysInMo }, (_, i) => i + 1)]
-  const moName = cursor.toLocaleString('es-ES', { month: 'long' })
-  const moLabel = `${moName.charAt(0).toUpperCase() + moName.slice(1)} ${yr}`
-
-  function shift(dir: -1 | 1) {
-    setCursor(d => { const n = new Date(d); n.setMonth(n.getMonth() + dir); return n })
-  }
-  function pickDay(iso: string) {
-    // Click sets start (and end if before current start), shift-extend isn't
-    // available without modifier — second click after start extends end.
-    if (iso < startDate) { setStartDate(iso); return }
-    if (iso > endDate)   { setEndDate(iso); return }
-    // Click inside range → reset to single day
-    setStartDate(iso); setEndDate(iso)
-  }
-
-  function isInRange(iso: string) { return iso >= startDate && iso <= endDate }
-
-  async function submit() {
-    if (endDate < startDate) { setErr('La fecha de fin debe ser igual o posterior'); return }
-    setBusy(true); setErr('')
-    const payload = {
-      start_date: startDate, end_date: endDate, all_day: allDay,
-      repeat_kind: repeatKind, repeat_interval: repeatKind === 'none' ? 1 : repeatInterval,
-      repeat_until: repeatKind === 'none' ? null : (untilMode === 'until' ? repeatUntil : null),
-      reason: reason.trim() || null,
-    }
-    const url = initial
-      ? `/api/v1/tenant/${slug}/services/people/${smId}/blockouts/${initial.id}`
-      : `/api/v1/tenant/${slug}/services/people/${smId}/blockouts`
-    const res = await api(url, {
-      method: initial ? 'PATCH' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}))
-      setErr(j.detail || 'Error'); setBusy(false); return
-    }
-    onSaved(await res.json())
-  }
-
-  return (
-    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={{ ...s.modal, width: 820, maxWidth: '95vw', padding: 0, overflow: 'hidden' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 24px', borderBottom: `1px solid ${C.border}` }}>
-          <h3 style={s.modalTitle}>Fechas de bloqueo</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: C.muted, lineHeight: 1 }}>✕</button>
-        </div>
-        <div data-tp="cal-modal-body" style={{ display: 'flex', minHeight: 420 }}>
-          {/* Calendar */}
-          <div style={{ flex: 1, padding: '20px 24px', borderRight: `1px solid ${C.border}` }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-              <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{moLabel}</span>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12 }}
-                  onClick={() => { const d = new Date(); d.setDate(1); setCursor(d); setStartDate(today); setEndDate(today) }}>
-                  Hoy
-                </button>
-                <div style={{ display: 'flex', gap: 2 }}>
-                  <button style={s.iconBtn} onClick={() => shift(-1)} title="Mes anterior">‹</button>
-                  <button style={s.iconBtn} onClick={() => shift(1)} title="Mes siguiente">›</button>
-                </div>
-              </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, textAlign: 'center', marginBottom: 6 }}>
-              {['LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB', 'DOM'].map(d => (
-                <span key={d} style={{ fontSize: 10, fontWeight: 700, color: C.light, padding: '4px 0', letterSpacing: '0.06em' }}>{d}</span>
-              ))}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4 }}>
-              {cells.map((day, i) => {
-                if (day == null) return <div key={i} style={{ height: 38 }} />
-                const iso = `${yr}-${String(mo + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-                const inRange = isInRange(iso)
-                const isStart = iso === startDate
-                const isEnd = iso === endDate
-                const isToday = iso === today
-                return (
-                  <button key={i} onClick={() => pickDay(iso)}
-                    style={{
-                      height: 38, borderRadius: 8, cursor: 'pointer',
-                      border: isToday && !inRange ? `1.5px solid ${C.primary}` : 'none',
-                      background: inRange ? (isStart || isEnd ? C.danger : '#FECACA') : (isToday ? C.primaryLight : 'transparent'),
-                      color: inRange ? (isStart || isEnd ? '#fff' : '#7F1D1D') : (isToday ? C.primary : C.text),
-                      fontSize: 13, fontWeight: inRange || isToday ? 700 : 500,
-                      transition: 'background 120ms',
-                    }}>{day}</button>
-                )
-              })}
+              <div className="mono" style={{ fontSize: 10, color: 'var(--text-3)' }}>1:24 / 4:38</div>
             </div>
           </div>
-          {/* Form */}
-          <div style={{ width: 340, padding: '20px 22px', background: C.bg, display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-              <input type="checkbox" checked={allDay} onChange={e => setAllDay(e.target.checked)} />
-              <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Todo el día</span>
-            </label>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <label style={s.label}>Fecha inicio<input type="date" style={s.input} value={startDate} onChange={e => setStartDate(e.target.value)} /></label>
-              <label style={s.label}>Fecha fin<input type="date" style={s.input} value={endDate} onChange={e => setEndDate(e.target.value)} /></label>
-            </div>
 
+          <div style={{ padding: '20px 24px' }}>
+            <div className="row-between" style={{ marginBottom: 14 }}>
+              <div className="seg">
+                <button className="seg-btn is-active">Letra + Acordes</button>
+                <button className="seg-btn">Solo letra</button>
+                <button className="seg-btn">Partitura</button>
+              </div>
+              <button className="btn btn-secondary btn-sm"><I.Eye size={13}/> Vista músico</button>
+            </div>
+            <div style={{ fontFamily: 'Geist Mono, ui-monospace, monospace', fontSize: 14, lineHeight: 2.1, whiteSpace: 'pre-wrap' }}>
+{`[Verso 1]
+   D                A
+Maravilloso es tu nombre
+   Bm              G
+Cantaremos por siempre
+   D              A
+De tu gracia sin medida
+   G              D
+Renacemos cada día
+
+[Coro]
+G        D       A
+Santo, santo, santo
+G        D       A
+Tu eres el cordero
+G        D
+Digno de toda gloria
+   Bm    A    D
+Por la eternidad`}
+            </div>
+          </div>
+        </section>
+
+        <aside className="col-4 stack" style={{ gap: 'var(--gap)' }}>
+          <div className="card">
+            <div className="card-head"><div className="card-title">Recursos</div></div>
             <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>Repetir</div>
-              {repeatKind === 'none' ? (
-                <select style={s.select} value="none" onChange={e => setRepeatKind(e.target.value as RepeatKind)}>
-                  <option value="none">No se repite</option>
-                  <option value="day">Cada día</option>
-                  <option value="week">Cada semana</option>
-                  <option value="month">Cada mes</option>
-                  <option value="year">Cada año</option>
-                </select>
-              ) : (
-                <>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: 6 }}>
-                    <select style={{ ...s.select, fontSize: 12, padding: '6px 8px' }}
-                      value={repeatInterval} onChange={e => setRepeatInterval(parseInt(e.target.value))}>
-                      {CADA_LABEL.slice(1).map((label, i) => (
-                        <option key={i + 1} value={i + 1}>{label}</option>
-                      ))}
-                    </select>
-                    <select style={{ ...s.select, fontSize: 12, padding: '6px 8px' }}
-                      value={repeatKind} onChange={e => setRepeatKind(e.target.value as RepeatKind)}>
-                      <option value="day">día{repeatInterval > 1 ? 's' : ''}</option>
-                      <option value="week">semana{repeatInterval > 1 ? 's' : ''}</option>
-                      <option value="month">mes{repeatInterval > 1 ? 'es' : ''}</option>
-                      <option value="year">año{repeatInterval > 1 ? 's' : ''}</option>
-                    </select>
-                    <select style={{ ...s.select, fontSize: 12, padding: '6px 8px' }}
-                      value={untilMode} onChange={e => setUntilMode(e.target.value as 'forever' | 'until')}>
-                      <option value="forever">siempre</option>
-                      <option value="until">hasta</option>
-                    </select>
+              {[
+                { Icon: I.Doc,   t: 'Letra.docx',         meta: '14 KB' },
+                { Icon: I.Music, t: 'Mp3 original.mp3',   meta: '4:38 · 6.4 MB' },
+                { Icon: I.Doc,   t: 'Acordes (PDF)',      meta: '2 páginas · 240 KB' },
+                { Icon: I.Doc,   t: 'Multipista (.zip)',  meta: '8 pistas · 84 MB' },
+              ].map((r, i) => (
+                <div key={i} className="list-row" style={{ borderRadius: 0 }}>
+                  <div style={{ width: 30, height: 30, borderRadius: 7, background: 'var(--surface-3)', display: 'grid', placeItems: 'center', color: 'var(--text-2)' }}>
+                    <r.Icon size={14}/>
                   </div>
-                  {untilMode === 'until' && (
-                    <input type="date" style={{ ...s.input, marginTop: 6 }}
-                      value={repeatUntil} onChange={e => setRepeatUntil(e.target.value)} />
-                  )}
-                  <button onClick={() => setRepeatKind('none')}
-                    style={{ background: 'none', border: 'none', color: C.muted, fontSize: 11, cursor: 'pointer', marginTop: 4, padding: 0, textDecoration: 'underline' }}>
-                    No repetir
-                  </button>
-                </>
-              )}
-            </div>
-
-            <label style={s.label}>
-              Motivo <span style={{ color: C.muted, fontWeight: 400 }}>(opcional)</span>
-              <input style={s.input} value={reason} onChange={e => setReason(e.target.value)} placeholder="p. ej. Vacaciones" />
-            </label>
-
-            {err && <p style={s.errorText}>{err}</p>}
-          </div>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 24px', borderTop: `1px solid ${C.border}`, background: C.surface }}>
-          <span style={{ fontSize: 12, color: C.muted }}>
-            <svg viewBox="0 0 16 16" fill={C.muted} width={12} height={12} style={{ verticalAlign: 'middle', marginRight: 4 }}>
-              <path d="M8 0a8 8 0 100 16A8 8 0 008 0zm0 4a1 1 0 110 2 1 1 0 010-2zm1 8H7v-5h2v5z"/>
-            </svg>
-            Haz clic en otra fecha del calendario para extender el rango.
-          </span>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button style={s.btnGhost} onClick={onClose}>Cancelar</button>
-            <button style={s.btnPrimary} onClick={submit} disabled={busy}>{busy ? '…' : initial ? 'Guardar' : 'Guardar bloqueo'}</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Shared presentational primitives. MUST be module-level (not defined inside
-// a parent component) — otherwise React sees a new component type on every
-// render and unmounts/remounts the subtree (steals focus from inputs).
-// ─────────────────────────────────────────────────────────────────────────────
-function SectionTitle({ children, hint, right }: { children: React.ReactNode; hint?: string; right?: React.ReactNode }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-      <h3 style={{ fontSize: 15, fontWeight: 700, color: C.text, margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-        {children}
-        {hint && <span title={hint} style={{ color: C.light, cursor: 'help', fontSize: 12 }}>ⓘ</span>}
-      </h3>
-      {right}
-    </div>
-  )
-}
-function Card({ children, padded = true }: { children: React.ReactNode; padded?: boolean }) {
-  return (
-    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: padded ? '16px 18px' : 0 }}>{children}</div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Email helpers: variable picker, compose modal, templates manager
-// ─────────────────────────────────────────────────────────────────────────────
-function VariablePicker({ onInsert, anchorRight = false, allowedGroups }: {
-  onInsert: (tok: string) => void
-  anchorRight?: boolean   // Anchor dropdown to the right edge of the trigger
-  allowedGroups?: string[]  // restrict to these group labels (e.g. ['Destinatario', 'Organización'])
-}) {
-  const [open, setOpen] = useState(false)
-  const [search, setSearch] = useState('')
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
-  const btnRef = React.useRef<HTMLButtonElement>(null)
-  const popRef = React.useRef<HTMLDivElement>(null)
-  const searchRef = React.useRef<HTMLInputElement>(null)
-
-  // Position the popover next to the trigger using fixed coords so it escapes
-  // any ancestor `overflow: hidden` (e.g. the email modal).
-  function placePopover() {
-    const b = btnRef.current?.getBoundingClientRect()
-    if (!b) return
-    const W = 340, H = 420
-    let left = anchorRight ? b.right - W : b.left
-    let top = b.bottom + 4
-    // Clamp into viewport
-    if (left + W > window.innerWidth - 8) left = window.innerWidth - W - 8
-    if (left < 8) left = 8
-    if (top + H > window.innerHeight - 8) top = b.top - H - 4
-    if (top < 8) top = 8
-    setPos({ top, left })
-  }
-  useEffect(() => {
-    if (!open) return
-    placePopover()
-    const h = (e: MouseEvent) => {
-      const t = e.target as Node
-      if (popRef.current && popRef.current.contains(t)) return
-      if (btnRef.current && btnRef.current.contains(t)) return
-      setOpen(false)
-    }
-    const onScroll = () => placePopover()
-    document.addEventListener('mousedown', h)
-    window.addEventListener('scroll', onScroll, true)
-    window.addEventListener('resize', onScroll)
-    return () => {
-      document.removeEventListener('mousedown', h)
-      window.removeEventListener('scroll', onScroll, true)
-      window.removeEventListener('resize', onScroll)
-    }
-  }, [open, anchorRight])
-  useEffect(() => { if (open) setTimeout(() => searchRef.current?.focus(), 30) }, [open])
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    return VARIABLE_GROUPS
-      .filter(g => !allowedGroups || allowedGroups.includes(g.label))
-      .map(g => ({
-        ...g,
-        vars: g.vars.filter(v => !q || v.token.toLowerCase().includes(q) || v.hint.toLowerCase().includes(q)),
-      }))
-      .filter(g => g.vars.length > 0)
-  }, [search, allowedGroups])
-  const totalShown = filtered.reduce((n, g) => n + g.vars.length, 0)
-
-  return (
-    <>
-      <button ref={btnRef} type="button" onClick={() => setOpen(o => !o)}
-        style={{ ...s.btnGhost, fontSize: 12, padding: '4px 10px', display: 'inline-flex', gap: 4 }}>
-        {'{}'} Variable
-      </button>
-      {open && pos && ReactDOM.createPortal(
-        <div ref={popRef} style={{
-          position: 'fixed', top: pos.top, left: pos.left, zIndex: 9999,
-          background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.12)',
-          width: 340, maxHeight: 420, display: 'flex', flexDirection: 'column',
-        }}>
-          <div style={{ padding: '8px 8px 6px', borderBottom: `1px solid ${C.border}` }}>
-            <input ref={searchRef} type="text" placeholder="Buscar variable…" value={search}
-              onChange={e => setSearch(e.target.value)}
-              style={{ ...s.input, padding: '6px 10px', fontSize: 12 }} />
-          </div>
-          <div style={{ overflowY: 'auto', flex: 1, padding: 6 }}>
-            {totalShown === 0 && (
-              <div style={{ padding: '20px 10px', fontSize: 12, color: C.muted, textAlign: 'center' }}>
-                Sin resultados. Prueba con <code>to</code>, <code>org</code> o <code>signature</code>.
-              </div>
-            )}
-            {filtered.map(g => (
-              <div key={g.label} style={{ marginBottom: 6 }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: C.light, textTransform: 'uppercase', letterSpacing: '0.07em', padding: '6px 10px 4px' }}>{g.label}</div>
-                {g.vars.map(v => (
-                  <button key={v.token} onClick={() => { onInsert(v.token); setOpen(false); setSearch('') }}
-                    style={{ display: 'block', width: '100%', padding: '7px 10px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', borderRadius: 6 }}
-                    onMouseEnter={e => e.currentTarget.style.background = C.soft}
-                    onMouseLeave={e => e.currentTarget.style.background = 'none'}>
-                    <code style={{ fontSize: 12, fontFamily: 'monospace', color: C.primary }}>{v.token}</code>
-                    <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{v.hint}</div>
-                  </button>
-                ))}
-              </div>
-            ))}
-          </div>
-          <div style={{ borderTop: `1px solid ${C.border}`, padding: '8px 10px', fontSize: 11, color: C.muted }}>
-            Catálogo completo en <code>artifacts/EMAIL-VARIABLES.md</code>.
-          </div>
-        </div>,
-        document.body
-      )}
-    </>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// RichTextEditor — contentEditable + toolbar. Output is HTML stored in DB.
-// Uses execCommand (deprecated but supported everywhere). For sanitization:
-// only admin/leader/coordinator/svc-editor can compose, so we trust the markup.
-// ─────────────────────────────────────────────────────────────────────────────
-const RICH_SEP: React.CSSProperties = { width: 1, alignSelf: 'stretch', background: C.border, margin: '4px 4px' }
-
-// Global stylesheet for the rich editor — injected once. Covers:
-//   • Lists (default UA marker is fine but `outline: none` on the editor + some
-//     resets hide them in some setups; force list-style explicitly).
-//   • Links (blue + underline so they look like links inside the editor + view).
-//   • Toolbar button hover/active states.
-//   • Placeholder via :empty + data-placeholder.
-function useRichEditorStyles() {
-  useEffect(() => {
-    const id = 'worsyn-rich-styles'
-    if (document.getElementById(id)) return
-    const el = document.createElement('style')
-    el.id = id
-    el.textContent = `
-.worsyn-rich { position: relative; }
-.worsyn-rich ul { list-style: disc outside; padding-left: 1.4em; margin: 6px 0; }
-.worsyn-rich ol { list-style: decimal outside; padding-left: 1.4em; margin: 6px 0; }
-.worsyn-rich li { margin: 2px 0; }
-.worsyn-rich a { color: #4F46E5; text-decoration: underline; cursor: pointer; }
-.worsyn-rich h2 { font-size: 18px; font-weight: 700; margin: 10px 0 6px; }
-.worsyn-rich h3 { font-size: 15px; font-weight: 700; margin: 8px 0 4px; color: #334155; }
-.worsyn-rich p  { margin: 4px 0; }
-.worsyn-rich img { max-width: 100%; height: auto; border-radius: 4px; display: inline-block; vertical-align: middle; }
-.worsyn-rich hr { border: none; border-top: 1px solid #CBD5E1; margin: 14px 0; }
-.worsyn-rich:empty::before {
-  content: attr(data-placeholder); color: #94A3B8; pointer-events: none;
-}
-.worsyn-rich-btn { background: none; border: none; cursor: pointer; color: #64748B;
-  padding: 4px 8px; font-size: 13px; border-radius: 5px; min-width: 28px; height: 28px;
-  display: inline-flex; align-items: center; justify-content: center;
-  transition: background 100ms, color 100ms; }
-.worsyn-rich-btn:hover { background: #E2E8F0; color: #0F172A; }
-.worsyn-rich-btn[aria-pressed="true"] { background: #EEF2FF; color: #4F46E5; }
-/* HTML rendered in view modals/previews */
-.worsyn-rich-render ul { list-style: disc outside; padding-left: 1.4em; margin: 6px 0; }
-.worsyn-rich-render ol { list-style: decimal outside; padding-left: 1.4em; margin: 6px 0; }
-.worsyn-rich-render a  { color: #4F46E5; text-decoration: underline; }
-.worsyn-rich-render h2 { font-size: 17px; font-weight: 700; margin: 8px 0 4px; }
-.worsyn-rich-render h3 { font-size: 14px; font-weight: 700; margin: 6px 0 3px; color: #334155; }
-.worsyn-rich-render img { max-width: 100%; height: auto; border-radius: 4px; display: inline-block; vertical-align: middle; }
-.worsyn-rich-render hr  { border: none; border-top: 1px solid #CBD5E1; margin: 14px 0; }
-`
-    document.head.appendChild(el)
-  }, [])
-}
-
-// Closes the wrapping modal when the user hits Escape. Use in every modal that
-// has an onClose. Skips if the active element is contenteditable or input —
-// Escape should clear typing context first (browsers handle that), then close.
-function useEscape(handler: () => void) {
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); handler() } }
-    document.addEventListener('keydown', h)
-    return () => document.removeEventListener('keydown', h)
-  }, [handler])
-}
-
-export interface RichTextEditorHandle { insert: (html: string) => void; focus: () => void }
-
-const RichTextEditor = React.forwardRef<RichTextEditorHandle, {
-  value: string
-  onChange: (html: string) => void
-  placeholder?: string
-  extraToolbar?: React.ReactNode  // e.g. the VariablePicker
-  minHeight?: number
-}>(function RichTextEditor({ value, onChange, placeholder, extraToolbar, minHeight = 200 }, ref) {
-  useRichEditorStyles()
-  const editorRef = React.useRef<HTMLDivElement>(null)
-  const savedRangeRef = React.useRef<Range | null>(null)
-  // Track which commands are currently active at the caret.
-  const [active, setActive] = useState<{ [k: string]: boolean }>({})
-
-  // Mount-only innerHTML so React doesn't fight the caret on every keystroke.
-  useEffect(() => {
-    if (editorRef.current && editorRef.current.innerHTML !== value) {
-      editorRef.current.innerHTML = value || ''
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  function refreshActive() {
-    const sel = window.getSelection()
-    if (!sel || !editorRef.current) return
-    if (sel.rangeCount > 0 && !editorRef.current.contains(sel.getRangeAt(0).commonAncestorContainer)) return
-    try {
-      setActive({
-        bold: document.queryCommandState('bold'),
-        italic: document.queryCommandState('italic'),
-        underline: document.queryCommandState('underline'),
-        insertUnorderedList: document.queryCommandState('insertUnorderedList'),
-        insertOrderedList: document.queryCommandState('insertOrderedList'),
-        justifyLeft: document.queryCommandState('justifyLeft'),
-        justifyCenter: document.queryCommandState('justifyCenter'),
-        justifyRight: document.queryCommandState('justifyRight'),
-      })
-    } catch { /* queryCommandState can throw in some browsers; ignore */ }
-  }
-
-  function saveSelection() {
-    const sel = window.getSelection()
-    if (!sel || sel.rangeCount === 0) return
-    const r = sel.getRangeAt(0)
-    if (editorRef.current && editorRef.current.contains(r.commonAncestorContainer)) {
-      savedRangeRef.current = r.cloneRange()
-    }
-    refreshActive()
-  }
-  function restoreSelection() {
-    const r = savedRangeRef.current
-    const sel = window.getSelection()
-    if (!r || !sel) return
-    sel.removeAllRanges()
-    sel.addRange(r)
-  }
-  function exec(cmd: string, arg?: string) {
-    editorRef.current?.focus()
-    restoreSelection()
-    document.execCommand(cmd, false, arg)
-    if (editorRef.current) onChange(editorRef.current.innerHTML)
-    saveSelection()
-  }
-  function onInput(e: React.FormEvent<HTMLDivElement>) {
-    onChange((e.target as HTMLDivElement).innerHTML)
-    saveSelection()
-  }
-  function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
-    const meta = e.metaKey || e.ctrlKey
-    if (meta) {
-      // Force-handle B/I/U — relying on the browser default leaves them
-      // unresponsive in some setups (Chromium + complex React trees skip them).
-      const k = e.key.toLowerCase()
-      if (k === 'b') { e.preventDefault(); exec('bold');      return }
-      if (k === 'i') { e.preventDefault(); exec('italic');    return }
-      if (k === 'u') { e.preventDefault(); exec('underline'); return }
-      if (k === 'k') { e.preventDefault(); promptLink();      return }
-    }
-    // Tab → nest (esp. inside lists). Shift+Tab → un-nest. Always indent
-    // even outside a list so we don't trap focus inside the editor.
-    if (e.key === 'Tab') {
-      e.preventDefault()
-      exec(e.shiftKey ? 'outdent' : 'indent')
-      return
-    }
-  }
-  function promptLink() {
-    saveSelection()
-    const url = window.prompt('URL del enlace (https://…)')
-    if (!url) return
-    exec('createLink', url)
-    // Default <a> rendering in contentEditable inherits color/decoration from
-    // the editor — our .worsyn-rich CSS forces blue + underline so they look
-    // like real links both inside the editor and in the rendered output.
-  }
-  function insertHTML(html: string) {
-    editorRef.current?.focus()
-    restoreSelection()
-    document.execCommand('insertHTML', false, html)
-    if (editorRef.current) onChange(editorRef.current.innerHTML)
-    saveSelection()
-  }
-  // ── Images ────────────────────────────────────────────────────────────────
-  const IMG_MAX = 1 * 1024 * 1024  // 1 MB
-  const imgFileRef = React.useRef<HTMLInputElement>(null)
-  function handleImageFile(file: File): boolean {
-    if (!file.type.startsWith('image/')) {
-      alert('Solo se admiten imágenes (JPG, PNG, WebP, GIF…).')
-      return false
-    }
-    if (file.size > IMG_MAX) {
-      alert(`La imagen pesa ${(file.size / 1024 / 1024).toFixed(2)} MB y el máximo permitido es 1 MB.\nReduce su tamaño antes de insertarla.`)
-      return false
-    }
-    const r = new FileReader()
-    r.onload = () => {
-      if (typeof r.result !== 'string') return
-      const safeAlt = (file.name || 'imagen').replace(/"/g, '')
-      insertHTML(`<img src="${r.result}" alt="${safeAlt}" />`)
-    }
-    r.onerror = () => alert('No se pudo leer la imagen.')
-    r.readAsDataURL(file)
-    return true
-  }
-  function onPaste(e: React.ClipboardEvent<HTMLDivElement>) {
-    // Look for an image in the clipboard — if found, intercept and insert.
-    // Plain text/HTML paste falls through to the browser default.
-    const items = e.clipboardData?.items
-    if (!items) return
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i]
-      if (it.kind === 'file' && it.type.startsWith('image/')) {
-        const f = it.getAsFile()
-        if (f) {
-          e.preventDefault()
-          handleImageFile(f)
-          return
-        }
-      }
-    }
-  }
-
-  React.useImperativeHandle(ref, () => ({
-    insert: insertHTML,
-    focus: () => { editorRef.current?.focus(); restoreSelection() },
-  }), [])
-
-  function btn(cmd: string, label: React.ReactNode, title: string, extra?: React.CSSProperties) {
-    const pressed = !!active[cmd]
-    return (
-      <button type="button" title={title} aria-pressed={pressed}
-        className="worsyn-rich-btn"
-        onClick={() => exec(cmd)}
-        style={extra}>{label}</button>
-    )
-  }
-
-  return (
-    <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: '#fff' }}>
-      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', padding: 4, borderBottom: `1px solid ${C.border}`, gap: 1, background: C.bg, borderRadius: '8px 8px 0 0' }}
-        // Prevent toolbar buttons from stealing focus (and losing the selection).
-        onMouseDown={e => { saveSelection(); e.preventDefault() }}>
-        {btn('bold',      <b>B</b>,                          'Negrita (⌘/Ctrl + B)')}
-        {btn('italic',    <i style={{ fontFamily: 'Georgia, serif' }}>I</i>, 'Cursiva (⌘/Ctrl + I)')}
-        {btn('underline', <u>U</u>,                          'Subrayado (⌘/Ctrl + U)')}
-        <span style={RICH_SEP} />
-        <select title="Estilo de bloque"
-          className="worsyn-rich-btn"
-          onChange={e => { if (e.target.value) { exec('formatBlock', e.target.value); e.target.value = '' } }}
-          style={{ padding: '4px 6px', minWidth: 78, cursor: 'pointer' }}>
-          <option value="">Estilo</option>
-          <option value="h2">Título</option>
-          <option value="h3">Subtítulo</option>
-          <option value="p">Párrafo</option>
-        </select>
-        <span style={RICH_SEP} />
-        {btn('insertUnorderedList', '• ≡', 'Lista con viñetas')}
-        {btn('insertOrderedList',   '1.',  'Lista numerada')}
-        <button type="button" title="Aumentar sangría (Tab)" className="worsyn-rich-btn"
-          onClick={() => exec('indent')}>
-          <svg viewBox="0 0 16 16" width={14} height={14} fill="currentColor"><path d="M0 2h16v1.4H0zM5 6h11v1.4H5zM5 9h11v1.4H5zM0 12.6h16V14H0zM0 6.7l3 2.3-3 2.3z"/></svg>
-        </button>
-        <button type="button" title="Reducir sangría (Shift+Tab)" className="worsyn-rich-btn"
-          onClick={() => exec('outdent')}>
-          <svg viewBox="0 0 16 16" width={14} height={14} fill="currentColor"><path d="M0 2h16v1.4H0zM0 6h11v1.4H0zM0 9h11v1.4H0zM0 12.6h16V14H0zM16 6.7l-3 2.3 3 2.3z"/></svg>
-        </button>
-        <span style={RICH_SEP} />
-        {btn('justifyLeft',   '⇤', 'Alinear izquierda')}
-        {btn('justifyCenter', '↔', 'Centrar')}
-        {btn('justifyRight',  '⇥', 'Alinear derecha')}
-        <button type="button" title="Línea horizontal" className="worsyn-rich-btn"
-          onClick={() => exec('insertHorizontalRule')}>
-          <svg viewBox="0 0 16 16" width={14} height={14} fill="currentColor"><path d="M1 7.6h14v1.2H1z"/></svg>
-        </button>
-        <span style={RICH_SEP} />
-        <label title="Color del texto"
-          className="worsyn-rich-btn"
-          style={{ padding: 0, cursor: 'pointer', position: 'relative' }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: C.primary, padding: '0 6px' }}>A</span>
-          <input type="color" onChange={e => exec('foreColor', e.target.value)}
-            style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
-        </label>
-        <button type="button" title="Insertar enlace (⌘/Ctrl + K)" className="worsyn-rich-btn" onClick={promptLink}>🔗</button>
-        <button type="button" title="Insertar imagen (máx. 1 MB · o pega desde el portapapeles)"
-          className="worsyn-rich-btn" onClick={() => imgFileRef.current?.click()}>🖼️</button>
-        <input ref={imgFileRef} type="file" accept="image/*" style={{ display: 'none' }}
-          onChange={e => { const f = e.target.files?.[0]; if (f) handleImageFile(f); e.target.value = '' }} />
-        <button type="button" title="Quitar formato" className="worsyn-rich-btn" onClick={() => exec('removeFormat')}>Tₓ</button>
-        {extraToolbar && (<><span style={RICH_SEP} />{extraToolbar}</>)}
-      </div>
-      <div ref={editorRef} contentEditable suppressContentEditableWarning
-        className="worsyn-rich"
-        onInput={onInput} onBlur={saveSelection} onKeyUp={saveSelection} onMouseUp={saveSelection}
-        onKeyDown={onKeyDown} onPaste={onPaste}
-        data-placeholder={placeholder}
-        style={{
-          minHeight, padding: '12px 14px', outline: 'none', fontSize: 14, lineHeight: 1.6, color: C.text,
-          fontFamily: 'inherit',
-        }}
-      />
-    </div>
-  )
-})
-
-function ComposeEmailModal({ slug, defaultRecipient, autoApplyKind, contextTeamId, onClose, onSent }: {
-  slug: string
-  defaultRecipient: ServicePerson
-  autoApplyKind?: EmailKind
-  contextTeamId?: string
-  onClose: () => void
-  onSent: (sent: EmailMessage[]) => void
-}) {
-  const [templates, setTemplates] = useState<EmailTemplate[]>([])
-  const [tplId, setTplId] = useState<string>('')
-  const [subject, setSubject] = useState('')
-  const [body, setBody] = useState('')
-  const [preview, setPreview] = useState<{ subject: string; body: string } | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
-  const [templatesOpen, setTemplatesOpen] = useState(false)
-  const bodyRef = React.useRef<RichTextEditorHandle>(null)
-  const subjectRef = React.useRef<HTMLInputElement>(null)
-  const [bodyKey, setBodyKey] = useState(0)   // bumps to remount editor when template applied
-  const [autoApplied, setAutoApplied] = useState(false)
-  useEscape(onClose)
-
-  const reloadTemplates = useCallback(async () => {
-    const r = await api(`/api/v1/tenant/${slug}/email/templates`)
-    setTemplates(r.ok ? await r.json() : [])
-  }, [slug])
-  useEffect(() => { reloadTemplates() }, [reloadTemplates])
-
-  function applyTemplate(id: string) {
-    setTplId(id)
-    const t = templates.find(x => x.id === id)
-    if (t) { setSubject(t.subject); setBody(t.body); setBodyKey(k => k + 1) }
-  }
-
-  // Auto-apply a template by kind (first matching) — used by the team-position
-  // welcome flow so the admin sees the welcome email already filled in.
-  useEffect(() => {
-    if (!autoApplyKind || autoApplied || templates.length === 0) return
-    const t = templates.find(x => x.kind === autoApplyKind) || templates.find(x => x.kind === autoApplyKind && x.is_default)
-    if (t) { applyTemplate(t.id); setAutoApplied(true) }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [templates, autoApplyKind, autoApplied])
-  function insertIntoBody(tok: string) { bodyRef.current?.insert(tok) }
-  function insertIntoSubject(tok: string) {
-    const el = subjectRef.current
-    if (!el) { setSubject(s => s + tok); return }
-    const start = el.selectionStart ?? subject.length, end = el.selectionEnd ?? subject.length
-    setSubject(subject.slice(0, start) + tok + subject.slice(end))
-    setTimeout(() => { el.focus(); el.setSelectionRange(start + tok.length, start + tok.length) }, 0)
-  }
-
-  async function doPreview() {
-    setErr('')
-    const r = await api(`/api/v1/tenant/${slug}/email/messages/preview`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipient_member_id: defaultRecipient.member_id, subject, body, team_id: contextTeamId || null }),
-    })
-    if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); return }
-    setPreview(await r.json())
-  }
-
-  async function send() {
-    setErr(''); setBusy(true)
-    const r = await api(`/api/v1/tenant/${slug}/email/messages`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        recipient_member_ids: [defaultRecipient.member_id],
-        template_id: tplId || null, subject, body,
-        team_id: contextTeamId || null,
-      }),
-    })
-    if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); setBusy(false); return }
-    onSent(await r.json())
-  }
-
-  return (
-    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div data-tp="wizard-modal" style={{ ...s.modal, width: 680, padding: 0, gap: 0 }}>
-        {/* Header (sticky) */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 28px 14px', borderBottom: `1px solid ${C.border}` }}>
-          <h3 style={s.modalTitle}>Enviar correo</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: C.muted, lineHeight: 1 }}>✕</button>
-        </div>
-
-        {/* Scrollable middle */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '14px 28px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            <select style={{ ...s.select, flex: 1 }} value={tplId} onChange={e => applyTemplate(e.target.value)}>
-              <option value="">— Sin plantilla (empezar en blanco) —</option>
-              {templates.map(t => (
-                <option key={t.id} value={t.id}>{KIND_LABEL[t.kind]} · {t.name}</option>
-              ))}
-            </select>
-            <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 12px' }} onClick={() => setTemplatesOpen(true)}>
-              Editar plantillas ›
-            </button>
-          </div>
-
-          <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 13, color: C.text }}>
-            <strong>Para:</strong> {defaultRecipient.full_name || defaultRecipient.email}
-            <span style={{ color: C.muted, marginLeft: 8 }}>&lt;{defaultRecipient.email}&gt;</span>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>Asunto</label>
-              <VariablePicker onInsert={insertIntoSubject} anchorRight />
-            </div>
-            <input ref={subjectRef} style={s.input} value={subject} onChange={e => setSubject(e.target.value)}
-              placeholder="p. ej. ¡Bienvenido(a) a {{ organization.name }}!" />
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <label style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>Cuerpo</label>
-            <RichTextEditor key={bodyKey} ref={bodyRef} value={body} onChange={setBody}
-              placeholder="Hola {{ to.first_name }}, …"
-              minHeight={220}
-              extraToolbar={<VariablePicker onInsert={insertIntoBody} anchorRight />} />
-          </div>
-
-          {preview && (
-            <div style={{ border: `1.5px solid ${C.primary}`, borderRadius: 10, padding: '14px 16px', background: '#fff' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingBottom: 8, borderBottom: `1px solid ${C.soft}` }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.primary, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Vista previa del correo</div>
-                <button onClick={() => setPreview(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 12 }}>✕ Cerrar</button>
-              </div>
-              <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>
-                <strong style={{ color: C.text }}>Para:</strong> {defaultRecipient.full_name || defaultRecipient.email} &lt;{defaultRecipient.email}&gt;
-              </div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 12 }}>
-                {preview.subject || <em style={{ color: C.muted, fontWeight: 400 }}>(sin asunto)</em>}
-              </div>
-              {preview.body
-                ? <div className="worsyn-rich-render" style={{ fontSize: 14, color: C.text, lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: preview.body }} />
-                : <em style={{ color: C.muted, fontSize: 13 }}>(sin cuerpo)</em>}
-            </div>
-          )}
-
-          {err && <p style={s.errorText}>{err}</p>}
-        </div>
-
-        {/* Footer (sticky) */}
-        <div style={{ ...s.modalActions, padding: '14px 28px 18px', borderTop: `1px solid ${C.border}`, marginTop: 0 }}>
-          <button style={s.btnGhost} onClick={onClose}>Cancelar</button>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button style={s.btnGhost} onClick={doPreview}>Vista previa</button>
-            <button style={s.btnPrimary} onClick={send} disabled={busy}>{busy ? '…' : 'Enviar 1'}</button>
-          </div>
-        </div>
-
-        {templatesOpen && (
-          <TemplatesManagerModal slug={slug}
-            onClose={() => { setTemplatesOpen(false); reloadTemplates() }} />
-        )}
-      </div>
-    </div>
-  )
-}
-
-function TemplatesManagerModal({ slug, onClose }: { slug: string; onClose: () => void }) {
-  const [kind, setKind] = useState<EmailKind>('general')
-  const [templates, setTemplates] = useState<EmailTemplate[]>([])
-  const [editing, setEditing] = useState<EmailTemplate | null | undefined>(undefined) // undefined closed, null create
-  const [busy, setBusy] = useState(false)
-  useEscape(onClose)
-
-  const reload = useCallback(async () => {
-    const r = await api(`/api/v1/tenant/${slug}/email/templates`)
-    setTemplates(r.ok ? await r.json() : [])
-  }, [slug])
-  useEffect(() => { reload() }, [reload])
-
-  const visible = templates.filter(t => t.kind === kind)
-
-  async function deleteTemplate(t: EmailTemplate) {
-    if (!confirm(`¿Eliminar la plantilla "${t.name}"?`)) return
-    const r = await api(`/api/v1/tenant/${slug}/email/templates/${t.id}`, { method: 'DELETE' })
-    if (r.ok) setTemplates(prev => prev.filter(x => x.id !== t.id))
-  }
-
-  if (editing !== undefined) {
-    return <TemplateEditorModal slug={slug} kind={kind} initial={editing}
-      onSaved={t => { setTemplates(prev => editing ? prev.map(x => x.id === t.id ? t : x) : [...prev, t]); setEditing(undefined) }}
-      onClose={() => setEditing(undefined)} />
-  }
-
-  return (
-    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div data-tp="wizard-modal" style={{ ...s.modal, width: 640 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
-            <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', padding: '0 0 4px' }}>‹ ENVIAR CORREO</button>
-            <h3 style={s.modalTitle}>Plantillas de email</h3>
-          </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: C.muted, lineHeight: 1 }}>✕</button>
-        </div>
-
-        <div style={{ display: 'flex', gap: 0, border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden' }}>
-          {(['general','schedule','signup','welcome'] as EmailKind[]).map((k, i) => {
-            const active = k === kind
-            return (
-              <button key={k} onClick={() => setKind(k)}
-                style={{
-                  flex: 1, padding: '12px 8px', cursor: 'pointer', border: 'none',
-                  background: active ? C.surface : C.bg,
-                  borderRight: i < 3 ? `1px solid ${C.border}` : 'none',
-                  fontSize: 12, fontWeight: 600, color: active ? C.text : C.muted,
-                }}>{KIND_LABEL[k]}</button>
-            )
-          })}
-        </div>
-
-        <p style={{ fontSize: 12, color: C.muted, margin: 0, lineHeight: 1.6 }}>{KIND_HINT[kind]}</p>
-
-        {visible.length === 0
-          ? (
-            <div style={{ padding: 36, textAlign: 'center', border: `1px dashed ${C.border}`, borderRadius: 10 }}>
-              <p style={{ color: C.success, fontWeight: 600, margin: 0 }}>Aún no has creado plantillas {KIND_LABEL[kind]}</p>
-              <p style={{ color: C.muted, fontSize: 13, margin: '4px 0 0' }}>Crea la primera abajo.</p>
-            </div>
-          )
-          : (
-            <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden' }}>
-              {visible.map(t => (
-                <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: `1px solid ${C.soft}` }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{t.name}</div>
-                    <div style={{ fontSize: 11, color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.subject}</div>
+                  <div className="list-body">
+                    <div className="list-title" style={{ fontSize: 13 }}>{r.t}</div>
+                    <div className="list-sub">{r.meta}</div>
                   </div>
-                  <button style={{ ...s.btnGhost, fontSize: 12, padding: '4px 10px' }} onClick={() => setEditing(t)}>Editar</button>
-                  <button style={{ ...s.btnGhost, fontSize: 12, padding: '4px 10px', color: C.danger, borderColor: 'rgba(239,68,68,.3)' }} onClick={() => deleteTemplate(t)}>Eliminar</button>
+                  <button className="icon-btn"><I.Down size={14}/></button>
                 </div>
               ))}
             </div>
-          )
-        }
-
-        <div style={s.modalActions}>
-          <button style={s.btnGhost} onClick={onClose}>Cerrar</button>
-          <button style={s.btnPrimary} onClick={() => setEditing(null)} disabled={busy}>+ Nueva plantilla {KIND_LABEL[kind]}</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function TemplateEditorModal({ slug, kind, initial, onSaved, onClose }: {
-  slug: string; kind: EmailKind; initial?: EmailTemplate | null
-  onSaved: (t: EmailTemplate) => void; onClose: () => void
-}) {
-  const [name, setName]   = useState(initial?.name || '')
-  const [subject, setSubject] = useState(initial?.subject || '')
-  const [body, setBody]   = useState(initial?.body || '')
-  const [busy, setBusy]   = useState(false)
-  const [err, setErr]     = useState('')
-  useEscape(onClose)
-  const bodyRef = React.useRef<RichTextEditorHandle>(null)
-  const subjectRef = React.useRef<HTMLInputElement>(null)
-
-  function insertBody(tok: string) { bodyRef.current?.insert(tok) }
-  function insertSubject(tok: string) {
-    const el = subjectRef.current
-    if (!el) { setSubject(s => s + tok); return }
-    const start = el.selectionStart ?? subject.length, end = el.selectionEnd ?? subject.length
-    setSubject(subject.slice(0, start) + tok + subject.slice(end))
-    setTimeout(() => { el.focus(); el.setSelectionRange(start + tok.length, start + tok.length) }, 0)
-  }
-
-  async function save() {
-    if (!name.trim()) { setErr('Nombre requerido'); return }
-    setBusy(true); setErr('')
-    const url = initial
-      ? `/api/v1/tenant/${slug}/email/templates/${initial.id}`
-      : `/api/v1/tenant/${slug}/email/templates`
-    const r = await api(url, {
-      method: initial ? 'PATCH' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind, name: name.trim(), subject, body }),
-    })
-    if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); setBusy(false); return }
-    onSaved(await r.json())
-  }
-
-  return (
-    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div data-tp="wizard-modal" style={{ ...s.modal, width: 680, padding: 0, gap: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 28px 14px', borderBottom: `1px solid ${C.border}` }}>
-          <h3 style={s.modalTitle}>{initial ? 'Editar plantilla' : `Nueva plantilla ${KIND_LABEL[kind]}`}</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: C.muted, lineHeight: 1 }}>✕</button>
-        </div>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '14px 28px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <label style={s.label}>Nombre interno<input style={s.input} value={name} onChange={e => setName(e.target.value)} placeholder="p. ej. Bienvenida Equipo de Adoración" /></label>
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>Asunto</label>
-              <VariablePicker onInsert={insertSubject} anchorRight />
+          </div>
+          <div className="card">
+            <div className="card-head"><div className="card-title">Últimos servicios</div></div>
+            <div>
+              {[
+                { d: '24 May 2026', s: 'Servicio Dominical', who: 'Lucía' },
+                { d: '17 May 2026', s: 'Servicio Dominical', who: 'Diego' },
+                { d: '10 May 2026', s: 'Jóvenes', who: 'Diego' },
+                { d: '03 May 2026', s: 'Servicio Dominical', who: 'Lucía' },
+              ].map((h, i) => (
+                <div key={i} className="list-row" style={{ borderRadius: 0 }}>
+                  <div className="list-body">
+                    <div className="list-title" style={{ fontSize: 13 }}>{h.s}</div>
+                    <div className="list-sub">{h.d} · {h.who}</div>
+                  </div>
+                  <span className="list-chev"><I.Chev/></span>
+                </div>
+              ))}
             </div>
-            <input ref={subjectRef} style={s.input} value={subject} onChange={e => setSubject(e.target.value)} />
           </div>
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: C.muted, display: 'block', marginBottom: 4 }}>Cuerpo</label>
-            <RichTextEditor ref={bodyRef} value={body} onChange={setBody} minHeight={260}
-              extraToolbar={<VariablePicker onInsert={insertBody} anchorRight />} />
-          </div>
-          {err && <p style={s.errorText}>{err}</p>}
-        </div>
-        <div style={{ ...s.modalActions, padding: '14px 28px 18px', borderTop: `1px solid ${C.border}`, marginTop: 0 }}>
-          <button style={s.btnGhost} onClick={onClose}>Cancelar</button>
-          <button style={s.btnPrimary} onClick={save} disabled={busy}>{busy ? '…' : initial ? 'Guardar' : 'Crear'}</button>
-        </div>
+        </aside>
       </div>
     </div>
   )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PersonDetailView — full person profile (Scheduling | Communication | Details)
+// Media (port of screens-b.jsx::Media)
 // ─────────────────────────────────────────────────────────────────────────────
-function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
-  slug: string
-  person: ServicePerson
-  allTeams: Team[]
-  onBack: () => void
-  onChanged: (p: ServicePerson) => void
-}) {
-  const [tab, setTab] = useState<'scheduling' | 'communication' | 'details'>('scheduling')
-  const [rolePickerOpen, setRolePickerOpen] = useState(false)
-  const [actionsOpen, setActionsOpen] = useState(false)
-  const [showModulePermsStub, setShowModulePermsStub] = useState(false)
-  const [headerBusy, setHeaderBusy] = useState(false)
+const MEDIA_COLORS: Record<string, [string, string]> = {
+  image: ['#5E5CE6', '#BF5AF2'],
+  video: ['#0A84FF', '#5E5CE6'],
+  audio: ['#FF9F0A', '#FF453A'],
+  doc:   ['#30D158', '#34C8E8'],
+}
+const MEDIA_ICON: Record<string, keyof typeof I> = { image: 'Photo', video: 'Play', audio: 'Music', doc: 'Doc' }
 
-  async function changeServiceRole(newRole: ServiceRole) {
-    setHeaderBusy(true)
-    try {
-      const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ service_role: newRole }),
-      })
-      if (r.ok) onChanged(await r.json() as ServicePerson)
-    } finally { setHeaderBusy(false); setRolePickerOpen(false) }
-  }
-
-  async function toggleActive() {
-    const next = !(person.is_active !== false)
-    const verb = next ? 'habilitar' : 'deshabilitar'
-    if (!confirm(`¿Seguro que quieres ${verb} a ${person.full_name || person.email}?`)) return
-    setHeaderBusy(true)
-    try {
-      const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ is_active: next }),
-      })
-      if (r.ok) onChanged(await r.json() as ServicePerson)
-      else { const j = await r.json().catch(() => ({} as any)); alert(j.detail || 'Error') }
-    } finally { setHeaderBusy(false); setActionsOpen(false) }
-  }
-
-  async function deletePerson() {
-    if (!confirm(`¿Eliminar a ${person.full_name || person.email}? Esta acción es irreversible.`)) return
-    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}`, { method: 'DELETE' })
-    if (r.ok) onBack()
-    else { const j = await r.json().catch(() => ({} as any)); alert(j.detail || 'Error') }
-  }
-
-  const [blockouts, setBlockouts] = useState<Blockout[]>([])
-  const [loadingB, setLoadingB] = useState(true)
-  const [blockoutOpen, setBlockoutOpen] = useState(false)
-  // Preferences (editable plans-per-month / plans-per-day)
-  const [prefsEditing, setPrefsEditing] = useState(false)
-  const [prefsMonth, setPrefsMonth] = useState<number | null>(person.scheduling?.max_per_month ?? null)
-  const [prefsDay, setPrefsDay] = useState<number | null>(person.scheduling?.max_per_day ?? null)
-  const [prefsSaving, setPrefsSaving] = useState(false)
-  // Person → Teams membership
-  const [personTeams, setPersonTeams] = useState<PersonTeam[]>([])
-  const [loadingPT, setLoadingPT] = useState(true)
-  const [teamPickerOpen, setTeamPickerOpen] = useState(false)
-  const [pickedTeamId, setPickedTeamId] = useState<string>('')
-  const [pickedPositionIds, setPickedPositionIds] = useState<string[]>([])
-  const [pickedTeamPositions, setPickedTeamPositions] = useState<{ id: string; name: string }[]>([])
-  const [welcomeAfterAdd, setWelcomeAfterAdd] = useState<{ teamId: string } | null>(null)
-  const [addingTeamBusy, setAddingTeamBusy] = useState(false)
-  // Signature
-  const [sigEditing, setSigEditing] = useState(false)
-  const [sigText, setSigText]   = useState(person.signature?.text  || '')
-  const [sigImage, setSigImage] = useState<string | null>(person.signature?.image || null)
-  const [sigSaving, setSigSaving] = useState(false)
-  const [sigErr, setSigErr] = useState('')
-  const sigFileRef = React.useRef<HTMLInputElement>(null)
-  const sigTextRef = React.useRef<HTMLTextAreaElement>(null)
-  function insertIntoSig(tok: string) {
-    const el = sigTextRef.current
-    if (!el) { setSigText(t => t + tok); return }
-    const start = el.selectionStart ?? sigText.length, end = el.selectionEnd ?? sigText.length
-    const newVal = sigText.slice(0, start) + tok + sigText.slice(end)
-    setSigText(newVal)
-    setTimeout(() => { el.focus(); el.setSelectionRange(start + tok.length, start + tok.length) }, 0)
-  }
-  // Communication: messages list + compose
-  const [msgs, setMsgs] = useState<EmailMessage[]>([])
-  const [msgsLoading, setMsgsLoading] = useState(true)
-  const [msgsTab, setMsgsTab] = useState<'received' | 'sent'>('received')
-  const [composeOpen, setComposeOpen] = useState(false)
-  const [openMsg, setOpenMsg] = useState<EmailMessage | null>(null)
-  const reloadMsgs = useCallback(async () => {
-    setMsgsLoading(true)
-    try {
-      const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/messages`)
-      setMsgs(r.ok ? await r.json() : [])
-    } finally { setMsgsLoading(false) }
-  }, [slug, person.id])
-  useEffect(() => { reloadMsgs() }, [reloadMsgs])
-  // Password reset — sends a 10-min magic link via SMTP
-  const [sendingReset, setSendingReset] = useState(false)
-  async function sendPasswordReset() {
-    if (!confirm(`¿Enviar email de restablecimiento de contraseña a ${person.full_name || person.email}?\n\nEl enlace caduca en 10 minutos.`)) return
-    setSendingReset(true)
-    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/password-reset`, { method: 'POST' })
-    setSendingReset(false)
-    if (!r.ok) {
-      const j = await r.json().catch(() => ({}))
-      alert(j.detail || 'Error al enviar')
-      return
-    }
-    const j = await r.json()
-    alert(`Email enviado a ${j.email}\n\nEl enlace caduca en ${j.expires_minutes} minutos.`)
-    reloadMsgs()  // surface the sent row immediately
-    setTimeout(() => reloadMsgs(), 2500)
-    setTimeout(() => reloadMsgs(), 8000)
-  }
-  async function deleteMsg(m: EmailMessage) {
-    if (!confirm('¿Eliminar este mensaje de Worsyn?\n(Solo se elimina de aquí — no toca la bandeja del destinatario.)')) return
-    const r = await api(`/api/v1/tenant/${slug}/email/messages/${m.id}`, { method: 'DELETE' })
-    if (r.ok) {
-      setMsgs(prev => prev.filter(x => x.id !== m.id))
-      if (openMsg?.id === m.id) setOpenMsg(null)
-    } else {
-      const j = await r.json().catch(() => ({}))
-      alert(j.detail || 'Error al eliminar')
-    }
-  }
-  const [editingBlockout, setEditingBlockout] = useState<Blockout | null>(null)
-
-  const reload = useCallback(async () => {
-    setLoadingB(true)
-    try {
-      const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/blockouts`)
-      setBlockouts(r.ok ? await r.json() : [])
-    } finally { setLoadingB(false) }
-  }, [slug, person.id])
-  useEffect(() => { reload() }, [reload])
-
-  async function removeBlockout(b: Blockout) {
-    if (!confirm('¿Eliminar este bloqueo?')) return
-    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/blockouts/${b.id}`, { method: 'DELETE' })
-    if (r.ok) setBlockouts(prev => prev.filter(x => x.id !== b.id))
-  }
-
-  // ── Scheduling summary (assignments) ──────────────────────────────────────
-  type RangePreset = 'upcoming' | '1m' | '3m' | '6m' | '12m' | 'custom'
-  const [rangePreset, setRangePreset] = useState<RangePreset>('upcoming')
-  const [customFrom, setCustomFrom] = useState('')
-  const [customTo, setCustomTo] = useState('')
-  const [summary, setSummary] = useState({ confirmed: 0, pending: 0, declined: 0, total: 0 })
-  const [assignments, setAssignments] = useState<any[]>([])
-  const [loadingA, setLoadingA] = useState(true)
-  function resolveRange(p: RangePreset): { from: string | null; to: string | null } {
-    const today = new Date()
-    const iso = (d: Date) => d.toISOString().slice(0, 10)
-    if (p === 'upcoming') return { from: iso(today), to: null }
-    if (p === 'custom')   return { from: customFrom || null, to: customTo || null }
-    const months = p === '1m' ? 1 : p === '3m' ? 3 : p === '6m' ? 6 : 12
-    const past = new Date(today); past.setMonth(past.getMonth() - months)
-    return { from: iso(past), to: iso(today) }
-  }
-  const reloadAssignments = useCallback(async () => {
-    setLoadingA(true)
-    try {
-      const { from, to } = resolveRange(rangePreset)
-      const qs = new URLSearchParams()
-      if (from) qs.set('range_from', from)
-      if (to)   qs.set('range_to',   to)
-      const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/assignments?${qs}`)
-      if (r.ok) {
-        const j = await r.json()
-        setSummary(j.summary || { confirmed: 0, pending: 0, declined: 0, total: 0 })
-        setAssignments(j.items || [])
-      }
-    } finally { setLoadingA(false) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slug, person.id, rangePreset, customFrom, customTo])
-  useEffect(() => { reloadAssignments() }, [reloadAssignments])
-
-  const RANGE_LABELS: Record<RangePreset, string> = {
-    upcoming: 'Próximos', '1m': 'Último mes', '3m': 'Últimos 3 meses',
-    '6m': 'Últimos 6 meses', '12m': 'Últimos 12 meses', custom: 'Personalizado',
-  }
-
-  // ── Person Teams ──────────────────────────────────────────────────────────
-  const reloadPersonTeams = useCallback(async () => {
-    setLoadingPT(true)
-    try {
-      const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/teams`)
-      setPersonTeams(r.ok ? await r.json() : [])
-    } finally { setLoadingPT(false) }
-  }, [slug, person.id])
-  useEffect(() => { reloadPersonTeams() }, [reloadPersonTeams])
-
-  const availableTeams = useMemo(() => {
-    const taken = new Set(personTeams.map(pt => pt.team_id))
-    return allTeams.filter(t => !taken.has(t.id))
-  }, [allTeams, personTeams])
-
-  // Load team positions when a team is picked
-  useEffect(() => {
-    setPickedPositionIds([])
-    setPickedTeamPositions([])
-    if (!pickedTeamId) return
-    let cancel = false
-    api(`/api/v1/tenant/${slug}/teams/${pickedTeamId}/detail`).then(r => r.ok ? r.json() : null).then(d => {
-      if (cancel || !d) return
-      setPickedTeamPositions((d.positions || []).map((p: any) => ({ id: p.id, name: p.name })))
-    })
-    return () => { cancel = true }
-  }, [slug, pickedTeamId])
-
-  async function addToTeam() {
-    if (!pickedTeamId || addingTeamBusy) return
-    setAddingTeamBusy(true)
-    try {
-      // 1. Add to team_memberships (legacy convenience — keeps the Person→Teams list working)
-      const wasInTeam = personTeams.some(pt => pt.team_id === pickedTeamId)
-      if (!wasInTeam) {
-        const r1 = await api(`/api/v1/tenant/${slug}/teams/${pickedTeamId}/members`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ member_id: person.member_id, role: null }),
-        })
-        if (!r1.ok && r1.status !== 409) {
-          const j = await r1.json().catch(() => ({}))
-          alert(j.detail || 'Error al añadir al equipo'); return
-        }
-      }
-      // 2. Add to each picked position via the canonical position-members endpoint.
-      //    This is the same code path the team detail uses, so the auto-enroll
-      //    + newly_enrolled semantics stay consistent across both directions.
-      for (const posId of pickedPositionIds) {
-        const r2 = await api(`/api/v1/tenant/${slug}/teams/${pickedTeamId}/positions/${posId}/members`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ member_ids: [person.member_id] }),
-        })
-        if (!r2.ok && r2.status !== 409) {
-          const j = await r2.json().catch(() => ({}))
-          alert(j.detail || 'Error al asignar la posición'); return
-        }
-      }
-      // 3. Queue team_welcome compose if this is a NEW team join for this person.
-      //    (Skip when the person was already in the team — they just got more positions.)
-      if (!wasInTeam) {
-        setWelcomeAfterAdd({ teamId: pickedTeamId })
-      }
-      setTeamPickerOpen(false); setPickedTeamId(''); setPickedPositionIds([])
-      reloadPersonTeams()
-    } finally { setAddingTeamBusy(false) }
-  }
-  async function removeFromTeam(pt: PersonTeam) {
-    if (!confirm(`¿Quitar a ${person.full_name || person.email} de ${pt.team_name}?`)) return
-    const r = await api(`/api/v1/tenant/${slug}/teams/${pt.team_id}/members/${person.member_id}`, { method: 'DELETE' })
-    if (r.ok) setPersonTeams(prev => prev.filter(x => x.membership_id !== pt.membership_id))
-  }
-
-  // ── Preferences ───────────────────────────────────────────────────────────
-  async function savePrefs() {
-    setPrefsSaving(true)
-    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scheduling: { max_per_month: prefsMonth, max_per_day: prefsDay } }),
-    })
-    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.detail || 'Error'); setPrefsSaving(false); return }
-    const updated = await r.json() as ServicePerson
-    onChanged(updated)
-    setPrefsEditing(false); setPrefsSaving(false)
-  }
-  function fmtCap(v: number | null): string {
-    return v === null || v === undefined ? 'Sin límite' : `Hasta ${v}`
-  }
-
-  // ── Signature ─────────────────────────────────────────────────────────────
-  const SIG_MAX = 1 * 1024 * 1024
-  function handleSigFile(file: File) {
-    setSigErr('')
-    if (!file.type.startsWith('image/')) { setSigErr('Solo imágenes (JPG, PNG, WebP, etc.)'); return }
-    if (file.size > SIG_MAX)             { setSigErr(`Imagen demasiado grande (máx. 1 MB · actual ${(file.size/1024).toFixed(0)} KB)`); return }
-    const r = new FileReader()
-    r.onload = () => setSigImage(typeof r.result === 'string' ? r.result : null)
-    r.onerror = () => setSigErr('No se pudo leer la imagen')
-    r.readAsDataURL(file)
-  }
-  async function saveSignature() {
-    setSigSaving(true); setSigErr('')
-    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ signature: { text: sigText.trim() || null, image: sigImage } }),
-    })
-    if (!r.ok) {
-      const j = await r.json().catch(() => ({}))
-      setSigErr(j.detail || 'Error'); setSigSaving(false); return
-    }
-    const updated = await r.json() as ServicePerson
-    onChanged(updated)
-    setSigEditing(false); setSigSaving(false)
-  }
-  function cancelSig() {
-    setSigText(person.signature?.text || '')
-    setSigImage(person.signature?.image || null)
-    setSigErr(''); setSigEditing(false)
-  }
-
-
+function Media() {
+  const [view, setView] = useState<'grid' | 'list'>('grid')
+  const folders = [
+    { name: 'Bumpers', count: 12, c: 1 },
+    { name: 'Anuncios', count: 28, c: 4 },
+    { name: 'Fondos', count: 64, c: 3 },
+    { name: 'Sermones', count: 41, c: 2 },
+    { name: 'Letras', count: 156, c: 6 },
+    { name: 'Logos marca', count: 8, c: 7 },
+  ]
   return (
-    <main style={{ ...s.main, gap: 0 }}>
-      {/* Back link */}
-      <button onClick={onBack}
-        style={{ alignSelf: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '0 0 10px' }}>
-        ‹ PERSONAS
-      </button>
-
-      {/* Header */}
-      <div data-tp="detail-header" style={{ display: 'flex', alignItems: 'center', gap: 18, paddingBottom: 16, borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ width: 64, height: 64, borderRadius: 999, background: person.avatar ? `url(${person.avatar}) center/cover` : C.soft, color: C.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 700, flexShrink: 0 }}>
-          {!person.avatar && (person.full_name?.[0]?.toUpperCase() || person.email[0]?.toUpperCase())}
+    <div className="content">
+      <div className="page-head rise">
+        <div>
+          <span className="eyebrow">Media</span>
+          <h1 className="page-title">Tu <em>biblioteca</em> visual</h1>
+          <p className="page-sub">Fotos, vídeos, audio y documentos compartidos por toda la iglesia. Arrastra y suelta para subir.</p>
         </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <h2 style={{ fontSize: 22, fontWeight: 700, color: C.text, margin: 0 }}>{person.full_name || person.email}</h2>
-          <div style={{ display: 'flex', gap: 18, marginTop: 6, color: C.muted, fontSize: 13 }}>
-            <span>{person.email}</span>
-          </div>
-        </div>
-        <div data-tp="detail-header-actions" style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}>
-          {/* Disabled badge */}
-          {person.is_active === false && (
-            <span style={{
-              background: '#FEE2E2', color: '#991B1B', border: '1px solid #FCA5A5',
-              fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 999,
-              letterSpacing: '0.04em', textTransform: 'uppercase' as const,
-            }}>Deshabilitado</span>
-          )}
-
-          {/* Service role picker */}
-          <div style={{ position: 'relative' }}>
-            <button disabled={headerBusy} onClick={() => { setRolePickerOpen(o => !o); setActionsOpen(false) }}
-              title="Modificar permisos del miembro"
-              style={{ ...s.btnGhost, padding: '6px 12px', fontSize: 13, gap: 8 }}>
-              <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
-              </svg>
-              {SERVICE_ROLE_LABEL[person.service_role]}
-              <svg viewBox="0 0 16 16" fill={C.muted} width={10} height={10}><path d="M3 5h10l-5 6z"/></svg>
-            </button>
-            {rolePickerOpen && (
-              <div style={{
-                position: 'absolute', top: '100%', right: 0, marginTop: 4,
-                background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
-                boxShadow: '0 4px 16px rgba(0,0,0,.14)', zIndex: 50, minWidth: 220,
-              }}>
-                {(Object.keys(SERVICE_ROLE_LABEL) as ServiceRole[]).map(r => (
-                  <button key={r} onClick={() => changeServiceRole(r)}
-                    disabled={headerBusy}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-                      textAlign: 'left' as const, padding: '8px 14px',
-                      background: r === person.service_role ? C.primaryLight : 'transparent',
-                      color: r === person.service_role ? C.primary : C.text,
-                      fontWeight: r === person.service_role ? 600 : 400,
-                      border: 'none', cursor: headerBusy ? 'wait' : 'pointer', fontSize: 13,
-                      transition: 'background 0.12s',
-                    }}
-                    onMouseEnter={e => r !== person.service_role && (e.currentTarget.style.background = C.soft)}
-                    onMouseLeave={e => r !== person.service_role && (e.currentTarget.style.background = 'transparent')}>
-                    {r === person.service_role && <span style={{ color: C.primary }}>✓</span>}
-                    {SERVICE_ROLE_LABEL[r]}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Acciones dropdown */}
-          <div style={{ position: 'relative' }}>
-            <button disabled={headerBusy} onClick={() => { setActionsOpen(o => !o); setRolePickerOpen(false) }}
-              style={{ ...s.btnGhost, padding: '6px 12px', fontSize: 13, gap: 6 }}>
-              <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/>
-              </svg>
-              Acciones
-              <svg viewBox="0 0 16 16" fill={C.muted} width={10} height={10}><path d="M3 5h10l-5 6z"/></svg>
-            </button>
-            {actionsOpen && (
-              <div style={{
-                position: 'absolute', top: '100%', right: 0, marginTop: 4,
-                background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
-                boxShadow: '0 4px 16px rgba(0,0,0,.14)', zIndex: 50, minWidth: 250,
-              }}>
-                <button onClick={() => { setShowModulePermsStub(true); setActionsOpen(false) }}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left' as const,
-                    padding: '10px 14px', background: 'none', border: 'none', cursor: 'pointer',
-                    fontSize: 13, color: C.text, transition: 'background 0.12s',
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.background = C.soft)}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                  <svg viewBox="0 0 24 24" width={15} height={15} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/>
-                  </svg>
-                  Gestionar permisos por módulo
-                </button>
-                <button onClick={toggleActive} disabled={headerBusy}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left' as const,
-                    padding: '10px 14px', background: 'none', border: 'none',
-                    cursor: headerBusy ? 'wait' : 'pointer',
-                    fontSize: 13, color: person.is_active === false ? C.success : C.warning,
-                    fontWeight: 500, transition: 'background 0.12s',
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.background = C.soft)}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                  {person.is_active === false ? (
-                    <>
-                      <svg viewBox="0 0 24 24" width={15} height={15} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M20 6 9 17l-5-5"/>
-                      </svg>
-                      Habilitar miembro
-                    </>
-                  ) : (
-                    <>
-                      <svg viewBox="0 0 24 24" width={15} height={15} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M18.36 6.64A9 9 0 0 1 20.77 15M6.64 6.64a9 9 0 1 0 12.73 12.73M12 2v10"/>
-                      </svg>
-                      Deshabilitar miembro
-                    </>
-                  )}
-                </button>
-                <div style={{ height: 1, background: C.border, margin: '4px 0' }} />
-                <button onClick={deletePerson} disabled={headerBusy}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left' as const,
-                    padding: '10px 14px', background: 'none', border: 'none', cursor: headerBusy ? 'wait' : 'pointer',
-                    fontSize: 13, color: C.danger, fontWeight: 500, transition: 'background 0.12s',
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.background = C.dangerLight)}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                  <svg viewBox="0 0 24 24" width={15} height={15} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                  </svg>
-                  Eliminar persona
-                </button>
-              </div>
-            )}
-          </div>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn btn-secondary"><I.Folder size={14}/> Nueva carpeta</button>
+          <button className="btn btn-primary"><I.Upload size={14}/> Subir archivos</button>
         </div>
       </div>
 
-      {/* Tabs */}
-      <div data-tp="tab-strip" style={{ display: 'flex', gap: 4, padding: '12px 0 0', borderBottom: `1px solid ${C.border}` }}>
-        {(['scheduling', 'communication', 'details'] as const).map(id => {
-          const label = id === 'scheduling' ? 'Programación' : id === 'communication' ? 'Comunicación' : 'Detalles'
-          const active = tab === id
-          return (
-            <button key={id} onClick={() => setTab(id)}
-              style={{
-                background: active ? C.surface : 'transparent', border: 'none', cursor: 'pointer',
-                padding: '10px 18px', fontSize: 13, fontWeight: 600,
-                color: active ? C.text : C.muted,
-                borderTopLeftRadius: 8, borderTopRightRadius: 8,
-                borderBottom: `2px solid ${active ? C.primary : 'transparent'}`,
-              }}>{label}</button>
-          )
-        })}
-      </div>
-
-      {/* Tab content */}
-      <div data-tp="detail-grid" style={{ padding: '20px 0', display: 'grid', gridTemplateColumns: tab === 'details' ? '1fr 1fr 1fr' : '1.2fr 1fr', gap: 22, flex: 1 }}>
-        {tab === 'scheduling' && <>
-          {/* Left: Resumen de programación + Calendario (blockouts) */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-            <div>
-              <SectionTitle hint="Resumen de las veces que la persona ha sido solicitada a un plan, agrupado por estado.">
-                Resumen de programación
-              </SectionTitle>
-              <Card padded={false}>
-                {/* Range selector */}
-                <div style={{ padding: '12px 16px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <select value={rangePreset} onChange={e => setRangePreset(e.target.value as any)}
-                    style={{ ...s.select, padding: '6px 10px', fontSize: 13, width: 'auto' }}>
-                    {(['upcoming', '1m', '3m', '6m', '12m', 'custom'] as RangePreset[]).map(p => (
-                      <option key={p} value={p}>{RANGE_LABELS[p]}</option>
-                    ))}
-                  </select>
-                  {rangePreset === 'custom' && (
-                    <>
-                      <input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)}
-                        style={{ ...s.input, padding: '5px 9px', fontSize: 12, width: 140 }} />
-                      <span style={{ fontSize: 12, color: C.muted }}>–</span>
-                      <input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)}
-                        style={{ ...s.input, padding: '5px 9px', fontSize: 12, width: 140 }} />
-                    </>
-                  )}
-                </div>
-
-                {/* Donut + counts */}
-                {loadingA ? (
-                  <div style={{ padding: 32, textAlign: 'center', color: C.muted, fontSize: 13 }}>Cargando…</div>
-                ) : (
-                  <div style={{ padding: '22px 16px', display: 'grid', gridTemplateColumns: '180px 1fr', gap: 22, alignItems: 'center' }}>
-                    {/* SVG donut */}
-                    {(() => {
-                      const total = Math.max(1, summary.total)
-                      const segs = [
-                        { label: 'CONFIRMADOS',   v: summary.confirmed, c: C.success },
-                        { label: 'SIN RESPONDER', v: summary.pending,   c: C.warning  },
-                        { label: 'RECHAZADOS',    v: summary.declined,  c: C.danger  },
-                      ]
-                      const R = 60, CX = 80, CY = 80, STROKE = 18, CIRC = 2 * Math.PI * R
-                      let acc = 0
-                      return (
-                        <div style={{ position: 'relative', width: 160, height: 160 }}>
-                          <svg viewBox="0 0 160 160" width={160} height={160} style={{ transform: 'rotate(-90deg)' }}>
-                            <circle cx={CX} cy={CY} r={R} fill="none" stroke="#F1F5F9" strokeWidth={STROKE} />
-                            {summary.total > 0 && segs.filter(x => x.v > 0).map((seg, i) => {
-                              const len = (seg.v / total) * CIRC
-                              const dash = `${len} ${CIRC - len}`
-                              const offset = -acc
-                              acc += len
-                              return (
-                                <circle key={i} cx={CX} cy={CY} r={R} fill="none"
-                                  stroke={seg.c} strokeWidth={STROKE} strokeLinecap="butt"
-                                  strokeDasharray={dash} strokeDashoffset={offset} />
-                              )
-                            })}
-                          </svg>
-                          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                            <span style={{ fontSize: 22, fontWeight: 700, color: C.text }}>{summary.total}</span>
-                            <span style={{ fontSize: 10, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Total</span>
-                          </div>
-                        </div>
-                      )
-                    })()}
-                    {/* Counts column */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      {[
-                        { label: 'Confirmados',   v: summary.confirmed, c: C.success  },
-                        { label: 'Sin responder', v: summary.pending,   c: C.warning },
-                        { label: 'Rechazados',    v: summary.declined,  c: C.danger   },
-                      ].map((row, i) => (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <span style={{ width: 10, height: 10, borderRadius: 999, background: row.c, flexShrink: 0 }} />
-                          <span style={{ flex: 1, fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.07em' }}>{row.label}</span>
-                          <span style={{ fontSize: 17, fontWeight: 700, color: row.c, minWidth: 24, textAlign: 'right' }}>{row.v}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Upcoming plans table */}
-                {assignments.length > 0 && (
-                  <>
-                    <div style={{ padding: '10px 16px', borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`, background: C.bg }}>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Planes en el rango</span>
-                    </div>
-                    <table style={s.planTable}>
-                      <tbody>
-                        {assignments.map(a => {
-                          const statusIcon = a.status === 'confirmed' ? '✓' : a.status === 'declined' ? '✕' : '?'
-                          const statusColor = a.status === 'confirmed' ? C.success : a.status === 'declined' ? C.danger : C.warning
-                          return (
-                            <tr key={a.id}>
-                              <td style={{ ...s.planTd, width: 36, textAlign: 'center' }}>
-                                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 999, border: `2px solid ${statusColor}`, color: statusColor, fontSize: 12, fontWeight: 700 }}>{statusIcon}</span>
-                              </td>
-                              <td style={{ ...s.planTd, color: C.muted, fontSize: 12, whiteSpace: 'nowrap' }}>
-                                {a.scheduled_at ? fmtDate(a.scheduled_at) : '—'}
-                              </td>
-                              <td style={s.planTd}>
-                                <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{a.plan_title || a.service_type_name || '—'}</div>
-                                {(a.position || a.team_name) && (
-                                  <div style={{ fontSize: 11, color: C.muted, marginTop: 2, display: 'flex', alignItems: 'center', gap: 5 }}>
-                                    {a.team_color && <span style={{ width: 7, height: 7, borderRadius: 2, background: a.team_color, flexShrink: 0 }} />}
-                                    {a.position}{a.position && a.team_name ? ' · ' : ''}{a.team_name}
-                                  </div>
-                                )}
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </>
-                )}
-
-                {/* Empty state */}
-                {!loadingA && assignments.length === 0 && (
-                  <div style={{ padding: '24px 16px 28px', textAlign: 'center', color: C.muted, fontSize: 13, borderTop: `1px solid ${C.soft}` }}>
-                    No hay planes en este rango. Responder a solicitudes ayuda al líder de equipo a cuadrar los servicios.
-                  </div>
-                )}
-              </Card>
-            </div>
-
-            <div>
-              <SectionTitle hint="Bloqueos y disponibilidad de la persona" right={
-                <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={() => { setEditingBlockout(null); setBlockoutOpen(true) }}>
-                  + Añadir bloqueo
-                </button>
-              }>Calendario</SectionTitle>
-            <Card padded={false}>
-              <div style={{ padding: '10px 16px', borderBottom: `1px solid ${C.border}` }}>
-                <span style={{ fontSize: 12, fontWeight: 600, color: C.text }}>Próximos bloqueos</span>
-              </div>
-              {loadingB
-                ? <div style={{ padding: 28, textAlign: 'center', color: C.muted, fontSize: 13 }}>Cargando…</div>
-                : blockouts.length === 0
-                  ? <div style={{ padding: '32px 16px', textAlign: 'center', color: C.muted, fontSize: 13 }}>
-                      No hay bloqueos. Pulsa <strong>+ Añadir bloqueo</strong> para registrar un periodo de indisponibilidad.
-                    </div>
-                  : (
-                    <table style={s.planTable}>
-                      <thead>
-                        <tr>
-                          <th style={s.planTh}>Fechas</th>
-                          <th style={s.planTh}>Repetición</th>
-                          <th style={s.planTh}>Motivo</th>
-                          <th style={s.planTh}></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {blockouts.map(b => (
-                          <tr key={b.id}>
-                            <td style={s.planTd}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                <span style={{ width: 8, height: 8, borderRadius: 2, background: C.danger, flexShrink: 0 }} />
-                                <span style={{ fontSize: 13, fontWeight: 500 }}>
-                                  {b.start_date === b.end_date ? fmtDate(b.start_date) : `${fmtDate(b.start_date)} — ${fmtDate(b.end_date)}`}
-                                </span>
-                              </div>
-                            </td>
-                            <td style={{ ...s.planTd, fontSize: 12, color: C.muted }}>
-                              {b.repeat_kind === 'none' ? 'Una vez' : `${CADA_LABEL[b.repeat_interval] || 'Cada'} ${REPEAT_KIND_LABEL[b.repeat_kind]} ${b.repeat_until ? `hasta ${fmtDate(b.repeat_until)}` : 'siempre'}`}
-                            </td>
-                            <td style={{ ...s.planTd, fontSize: 12, color: C.text }}>{b.reason || '—'}</td>
-                            <td style={{ ...s.planTd, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                              <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, marginRight: 6 }}
-                                onClick={() => { setEditingBlockout(b); setBlockoutOpen(true) }}>Editar</button>
-                              <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, color: C.danger, borderColor: 'rgba(239,68,68,.3)' }}
-                                onClick={() => removeBlockout(b)}>Eliminar</button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )
-              }
-            </Card>
-            </div>
-          </div>
-
-          {/* Right: Preferences + Teams */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-            <div>
-              <SectionTitle hint="Cuántas veces puede ser agendada esta persona en planes."
-                right={
-                  prefsEditing
-                    ? (
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={() => { setPrefsEditing(false); setPrefsMonth(person.scheduling?.max_per_month ?? null); setPrefsDay(person.scheduling?.max_per_day ?? null) }}>Cancelar</button>
-                        <button style={{ ...s.btnPrimary, fontSize: 12, padding: '6px 12px' }} onClick={savePrefs} disabled={prefsSaving}>{prefsSaving ? '…' : 'Guardar'}</button>
-                      </div>
-                    )
-                    : <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={() => setPrefsEditing(true)}>Editar</button>
-                }>
-                Preferencias
-              </SectionTitle>
-              <Card>
-                {prefsEditing ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 12, alignItems: 'center' }}>
-                      <div style={{ width: 36, height: 36, borderRadius: 8, background: C.successLight, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                        <svg viewBox="0 0 20 20" fill={C.success} width={18} height={18}><path fillRule="evenodd" d="M6 2a1 1 0 011 1v1h6V3a1 1 0 112 0v1h1a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6a2 2 0 012-2h1V3a1 1 0 011-1z" clipRule="evenodd"/></svg>
-                      </div>
-                      <span style={{ fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
-                        Límites para el generador automático de cuadrantes (Fase 3). Útil cuando la iglesia tiene varios servicios el mismo día.
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <select style={{ ...s.select, padding: '6px 10px', fontSize: 13 }}
-                        value={prefsMonth ?? ''}
-                        onChange={e => setPrefsMonth(e.target.value === '' ? null : parseInt(e.target.value))}>
-                        <option value="">Sin límite</option>
-                        {[1,2,3,4,5,6,7,8,9,10].map(n => <option key={n} value={n}>Hasta {n}</option>)}
-                      </select>
-                      <span style={{ fontSize: 13, color: C.text }}>planes al mes</span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <select style={{ ...s.select, padding: '6px 10px', fontSize: 13 }}
-                        value={prefsDay ?? ''}
-                        onChange={e => setPrefsDay(e.target.value === '' ? null : parseInt(e.target.value))}>
-                        <option value="">Sin límite</option>
-                        {[1,2,3,4,5,6,7,8,9,10].map(n => <option key={n} value={n}>Hasta {n}</option>)}
-                      </select>
-                      <span style={{ fontSize: 13, color: C.text }}>planes al día</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <div style={{ width: 36, height: 36, borderRadius: 8, background: C.successLight, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                      <svg viewBox="0 0 20 20" fill={C.success} width={18} height={18}><path fillRule="evenodd" d="M6 2a1 1 0 011 1v1h6V3a1 1 0 112 0v1h1a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6a2 2 0 012-2h1V3a1 1 0 011-1z" clipRule="evenodd"/></svg>
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      {person.scheduling?.max_per_month == null && person.scheduling?.max_per_day == null
-                        ? <span style={{ fontSize: 13, color: C.text }}>Prográmame todas las veces que quieras</span>
-                        : (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 13, color: C.text }}>
-                            <span><strong>{fmtCap(person.scheduling?.max_per_month ?? null)}</strong> planes al mes</span>
-                            <span><strong>{fmtCap(person.scheduling?.max_per_day ?? null)}</strong> planes al día</span>
-                          </div>
-                        )
-                      }
-                    </div>
-                  </div>
-                )}
-              </Card>
-            </div>
-            <div>
-              <SectionTitle hint="Equipos asignados a esta persona"
-                right={availableTeams.length > 0
-                  ? <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={() => { setTeamPickerOpen(true); setPickedTeamId(availableTeams[0]?.id || ''); setPickedPositionIds([]) }}>+ Añadir</button>
-                  : <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} disabled title="Esta persona ya pertenece a todos los equipos">+ Añadir</button>}>
-                Equipos
-              </SectionTitle>
-              <Card padded={false}>
-                {loadingPT
-                  ? <div style={{ padding: 22, textAlign: 'center', color: C.muted, fontSize: 13 }}>Cargando…</div>
-                  : personTeams.length === 0
-                    ? <div style={{ padding: '20px 16px', fontSize: 13, color: C.muted }}>
-                        Esta persona aún no está en ningún equipo.{availableTeams.length > 0 ? ' Pulsa + Añadir para asignarla.' : ''}
-                      </div>
-                    : (
-                      <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        {personTeams.map(pt => (
-                          <div key={pt.membership_id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: `1px solid ${C.soft}` }}>
-                            <div style={{ width: 10, height: 10, borderRadius: 3, background: pt.team_color || C.primary, flexShrink: 0 }} />
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{pt.team_name}</div>
-                              {pt.role && <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{pt.role}</div>}
-                            </div>
-                            <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 18, lineHeight: 1, padding: 4 }}
-                              title="Quitar del equipo" onClick={() => removeFromTeam(pt)}>×</button>
-                          </div>
-                        ))}
-                      </div>
-                    )
-                }
-              </Card>
-              {teamPickerOpen && (
-                <div style={s.overlay} onClick={e => e.target === e.currentTarget && setTeamPickerOpen(false)}>
-                  <div data-tp="modal" style={{ ...s.modal, width: 460 }}>
-                    <h3 style={s.modalTitle}>Añadir a un equipo</h3>
-                    <label style={s.label}>
-                      Equipo
-                      <select style={s.select} value={pickedTeamId} onChange={e => setPickedTeamId(e.target.value)} autoFocus>
-                        {availableTeams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                      </select>
-                    </label>
-                    <div style={{ ...s.label, display: 'block' }}>
-                      <span>Posiciones <span style={{ color: C.muted, fontWeight: 400 }}>(opcional, marca todas las que apliquen)</span></span>
-                      <div style={{ marginTop: 8, maxHeight: 220, overflowY: 'auto', border: `1px solid ${C.border}`, borderRadius: 8, padding: 6, background: C.surface }}>
-                        {pickedTeamPositions.length === 0
-                          ? <div style={{ padding: '12px 8px', fontSize: 12, color: C.muted, fontStyle: 'italic', textAlign: 'center' as const }}>
-                              Este equipo aún no tiene posiciones. Se añadirá sólo como miembro general.
-                            </div>
-                          : pickedTeamPositions.map(p => {
-                              const checked = pickedPositionIds.includes(p.id)
-                              return (
-                                <label key={p.id}
-                                  onClick={() => setPickedPositionIds(prev => checked ? prev.filter(x => x !== p.id) : [...prev, p.id])}
-                                  style={{
-                                    display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px',
-                                    borderRadius: 6, cursor: 'pointer', userSelect: 'none' as const,
-                                    background: checked ? C.primaryLight : 'transparent',
-                                    transition: 'background 0.12s',
-                                  }}
-                                  onMouseEnter={e => !checked && (e.currentTarget.style.background = C.soft)}
-                                  onMouseLeave={e => !checked && (e.currentTarget.style.background = 'transparent')}>
-                                  <input type="checkbox" checked={checked} readOnly style={{ accentColor: C.primary }} />
-                                  <span style={{ fontSize: 13, color: C.text, fontWeight: checked ? 600 : 400 }}>{p.name}</span>
-                                </label>
-                              )
-                            })
-                        }
-                      </div>
-                    </div>
-                    <div style={s.modalActions}>
-                      <button style={s.btnGhost} onClick={() => setTeamPickerOpen(false)} disabled={addingTeamBusy}>Cancelar</button>
-                      <button style={s.btnPrimary} onClick={addToTeam} disabled={addingTeamBusy || !pickedTeamId}>
-                        {addingTeamBusy ? 'Añadiendo…' : 'Añadir'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {welcomeAfterAdd && (
-                <ComposeEmailModal
-                  slug={slug}
-                  defaultRecipient={person}
-                  autoApplyKind="team_welcome"
-                  contextTeamId={welcomeAfterAdd.teamId}
-                  onClose={() => setWelcomeAfterAdd(null)}
-                  onSent={() => setWelcomeAfterAdd(null)} />
-              )}
-            </div>
-          </div>
-        </>}
-
-        {tab === 'communication' && <>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-            <div>
-              <SectionTitle right={
-                <button style={{ ...s.btnPrimary, fontSize: 12, padding: '6px 12px' }} onClick={() => setComposeOpen(true)}>+ Nuevo</button>
-              }>Mensajes</SectionTitle>
-              <Card padded={false}>
-                <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}` }}>
-                  {(['received', 'sent'] as const).map(t => {
-                    const active = msgsTab === t
-                    const label = t === 'received' ? 'Recibidos' : 'Enviados'
-                    return (
-                      <button key={t} onClick={() => setMsgsTab(t)}
-                        style={{ padding: '10px 18px', fontSize: 13, background: active ? C.soft : 'transparent', border: 'none', cursor: 'pointer', fontWeight: 600, color: active ? C.text : C.muted }}>
-                        {label}
-                      </button>
-                    )
-                  })}
-                </div>
-                {(() => {
-                  const filtered = msgs.filter(m => m.direction === msgsTab)
-                  if (msgsLoading) return <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>Cargando…</div>
-                  if (filtered.length === 0) return (
-                    <div style={{ padding: '32px 16px', textAlign: 'center', color: C.muted, fontSize: 12 }}>
-                      {msgsTab === 'sent' ? 'Aún no se han enviado correos.' : 'Aún no hay correos recibidos.'}<br/>
-                      <span style={{ fontSize: 11 }}>El historial de email se conserva durante tres meses (configurable hasta 12).</span>
-                    </div>
-                  )
-                  return (
-                    <div>
-                      {filtered.map(m => (
-                        <div key={m.id} style={{ position: 'relative', borderBottom: `1px solid ${C.soft}` }}>
-                          <button onClick={() => setOpenMsg(m)}
-                            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 44px 10px 14px', background: 'none', border: 'none', cursor: 'pointer' }}
-                            onMouseEnter={e => e.currentTarget.style.background = C.soft}
-                            onMouseLeave={e => e.currentTarget.style.background = 'none'}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
-                              <span style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {m.subject || <em style={{ color: C.muted, fontWeight: 400 }}>(sin asunto)</em>}
-                              </span>
-                              <span style={{ fontSize: 11, color: C.muted, flexShrink: 0 }}>{fmtDate(m.created_at)}</span>
-                            </div>
-                            <div style={{ fontSize: 11, color: C.muted, marginTop: 2, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                              <span>{msgsTab === 'sent' ? 'Para' : 'De'}: {m.counterparty_name || (msgsTab === 'sent' ? m.recipient_email : m.sender_email || '—')}</span>
-                              {m.status === 'queued'    && <span style={{ ...s.pill, background: C.soft,         color: C.muted,   fontSize: 10, padding: '1px 6px' }}>En cola</span>}
-                              {m.status === 'sent'      && <span style={{ ...s.pill, background: C.successLight, color: C.success, fontSize: 10, padding: '1px 6px' }}>Enviado</span>}
-                              {m.status === 'failed'    && <span style={{ ...s.pill, background: C.dangerLight,  color: C.danger,  fontSize: 10, padding: '1px 6px' }}>Fallido</span>}
-                              {m.status === 'received'  && <span style={{ ...s.pill, background: C.primaryLight, color: C.primary, fontSize: 10, padding: '1px 6px' }}>Recibido</span>}
-                              {m.status === 'delivered' && <span style={{ ...s.pill, background: C.successLight, color: C.success, fontSize: 10, padding: '1px 6px' }}>Entregado</span>}
-                            </div>
-                          </button>
-                          <button onClick={e => { e.stopPropagation(); deleteMsg(m) }}
-                            title="Eliminar este mensaje de Worsyn"
-                            style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: C.muted, padding: 6, borderRadius: 6, fontSize: 14, lineHeight: 1 }}
-                            onMouseEnter={e => { e.currentTarget.style.background = C.dangerLight; e.currentTarget.style.color = C.danger }}
-                            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = C.muted }}>
-                            🗑
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )
-                })()}
-              </Card>
-            </div>
-            <div>
-              <SectionTitle hint="Envía un enlace de restablecimiento por email (caduca en 10 minutos)">Contraseña</SectionTitle>
-              <Card>
-                <button style={s.btnPrimary} onClick={sendPasswordReset} disabled={sendingReset}>
-                  {sendingReset ? 'Enviando…' : 'Enviar email de restablecimiento'}
-                </button>
-                <p style={{ fontSize: 11, color: C.muted, margin: '8px 0 0', lineHeight: 1.55 }}>
-                  La persona recibirá un correo con un enlace para elegir una nueva contraseña. <strong>Caduca en 10 minutos</strong> — si lo necesita después, reenvíalo desde aquí.
-                </p>
-              </Card>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-            <div>
-              <SectionTitle hint="Notificaciones push (Fase 3 — app móvil)">Notificaciones</SectionTitle>
-              <Card>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                  <div style={{ width: 28, height: 28, borderRadius: 6, background: C.successLight, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.success, fontWeight: 700, fontSize: 13 }}>≡</div>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>App preferida</span>
-                </div>
-                <select style={{ ...s.select, width: '100%' }}
-                  value={person.preferred_notif_app || 'servicios'}
-                  onChange={async e => {
-                    const v = e.target.value as 'servicios' | 'worsyn'
-                    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}`, {
-                      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ preferred_notif_app: v }),
-                    })
-                    if (r.ok) onChanged(await r.json())
-                  }}>
-                  <option value="servicios">Servicios (este módulo)</option>
-                  <option value="worsyn" disabled>Worsyn (próximamente)</option>
-                </select>
-                <p style={{ fontSize: 11, color: C.muted, margin: '8px 0 0', lineHeight: 1.55 }}>
-                  Cuando la app móvil esté disponible, las notificaciones push llegarán al app elegido. Por defecto es <strong>Servicios</strong>.
-                </p>
-              </Card>
-            </div>
-            <div>
-              <SectionTitle hint="Firma usada al enviar comunicaciones por email"
-                right={
-                  sigEditing
-                    ? (
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={cancelSig}>Cancelar</button>
-                        <button style={{ ...s.btnPrimary, fontSize: 12, padding: '6px 12px' }} onClick={saveSignature} disabled={sigSaving}>{sigSaving ? '…' : 'Guardar'}</button>
-                      </div>
-                    )
-                    : <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={() => setSigEditing(true)}>Editar</button>
-                }>
-                Firma
-              </SectionTitle>
-              <Card>
-                {sigEditing ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: 11, color: C.muted }}>Acepta variables del destinatario y de la organización.</span>
-                      <VariablePicker onInsert={insertIntoSig} anchorRight allowedGroups={['Destinatario', 'Organización']} />
-                    </div>
-                    <textarea ref={sigTextRef} value={sigText} onChange={e => setSigText(e.target.value)}
-                      placeholder={`${person.full_name || 'Nombre'}\nRol o cargo\n{{ organization.name }}`}
-                      style={{ ...s.input, minHeight: 110, resize: 'vertical' as const, fontFamily: 'inherit' }} />
-                    <div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 6 }}>Imagen / Logo</div>
-                      {sigImage ? (
-                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                          <img src={sigImage} alt="firma"
-                            style={{ maxWidth: 220, maxHeight: 90, borderRadius: 8, border: `1px solid ${C.border}`, background: '#fff', objectFit: 'contain', padding: 4 }} />
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                            <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} onClick={() => sigFileRef.current?.click()}>Reemplazar</button>
-                            <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px', color: C.danger, borderColor: 'rgba(239,68,68,.3)' }} onClick={() => setSigImage(null)}>Quitar</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <button onClick={() => sigFileRef.current?.click()}
-                          style={{ width: '100%', padding: '18px 16px', border: `1.5px dashed ${C.border}`, borderRadius: 10, background: C.bg, cursor: 'pointer', color: C.muted, fontSize: 13 }}>
-                          + Subir imagen (máx. 1 MB · JPG, PNG, WebP)
-                        </button>
-                      )}
-                      <input ref={sigFileRef} type="file" accept="image/*"
-                        style={{ display: 'none' }}
-                        onChange={e => { const f = e.target.files?.[0]; if (f) handleSigFile(f); e.target.value = '' }} />
-                    </div>
-                    {sigErr && <p style={s.errorText}>{sigErr}</p>}
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {person.signature?.text
-                      ? <pre style={{ margin: 0, fontFamily: 'inherit', fontSize: 13, color: C.text, whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{person.signature.text}</pre>
-                      : <p style={{ margin: 0, fontSize: 13, color: C.muted, fontStyle: 'italic' }}>Sin firma de texto.</p>}
-                    {person.signature?.image && (
-                      <img src={person.signature.image} alt="firma"
-                        style={{ maxWidth: 220, maxHeight: 90, borderRadius: 8, border: `1px solid ${C.border}`, background: '#fff', objectFit: 'contain', padding: 4 }} />
-                    )}
-                    <p style={{ margin: '4px 0 0', fontSize: 11, color: C.light, fontStyle: 'italic' }}>
-                      Se adjuntará automáticamente al final de los correos enviados desde el portal (cuando SMTP esté activo).
-                    </p>
-                  </div>
-                )}
-              </Card>
-            </div>
-          </div>
-        </>}
-
-        {tab === 'details' && <>
-          <div>
-            <SectionTitle hint="Etiquetas para clasificar a la persona" right={<button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} disabled>+ Añadir</button>}>Etiquetas</SectionTitle>
-            <Card>
-              <p style={{ fontSize: 13, color: C.muted, margin: 0 }}>Sin etiquetas todavía.</p>
-            </Card>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-            <div>
-              <SectionTitle hint="Notas internas (no visibles para la persona)">Notas</SectionTitle>
-              <Card>
-                <textarea disabled style={{ ...s.input, minHeight: 90, resize: 'vertical' as const, fontFamily: 'inherit', background: C.bg, color: C.muted }} placeholder="Aún no hay notas." />
-              </Card>
-            </div>
-            <div>
-              <SectionTitle right={<button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 10px' }} disabled>+ Añadir</button>}>Archivos</SectionTitle>
-              <Card padded={false}>
-                <div style={{ padding: '40px 16px', textAlign: 'center', color: C.muted, fontSize: 13, border: `1px dashed ${C.border}`, margin: 12, borderRadius: 8 }}>
-                  Arrastra y suelta o <span style={{ color: C.primary }}>haz clic aquí</span> para añadir tu primer archivo.
-                </div>
-              </Card>
-            </div>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-            <div>
-              <SectionTitle hint="Carpeta actual de la persona">Carpeta actual</SectionTitle>
-              <Card>
-                <input style={s.input} placeholder="Buscar carpeta…" disabled />
-              </Card>
-            </div>
-            <div>
-              <SectionTitle>Actividad</SectionTitle>
-              <Card>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-                    <span style={{ color: C.muted }}>Último acceso</span>
-                    <span style={{ color: C.text, fontWeight: 500 }}>—</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-                    <span style={{ color: C.muted }}>Creado</span>
-                    <span style={{ color: C.text, fontWeight: 500 }}>{fmtDate(person.welcomed_at)}</span>
-                  </div>
-                </div>
-              </Card>
-            </div>
-          </div>
-        </>}
-      </div>
-
-      {blockoutOpen && (
-        <BlockoutModal slug={slug} smId={person.id}
-          initial={editingBlockout || undefined}
-          onSaved={b => {
-            if (editingBlockout) {
-              setBlockouts(prev => prev.map(x => x.id === b.id ? b : x))
-            } else {
-              setBlockouts(prev => [b, ...prev])
-            }
-            setBlockoutOpen(false); setEditingBlockout(null)
-          }}
-          onClose={() => { setBlockoutOpen(false); setEditingBlockout(null) }} />
-      )}
-      {composeOpen && (
-        <ComposeEmailModal slug={slug} defaultRecipient={person}
-          onSent={sent => {
-            setMsgs(prev => [...sent, ...prev]); setComposeOpen(false); setMsgsTab('sent')
-            // SMTP dispatch is async (BackgroundTask). Poll twice to catch queued→sent/failed.
-            setTimeout(() => reloadMsgs(), 2500)
-            setTimeout(() => reloadMsgs(), 8000)
-          }}
-          onClose={() => setComposeOpen(false)} />
-      )}
-      {openMsg && (
-        <div style={s.overlay} onClick={e => e.target === e.currentTarget && setOpenMsg(null)}>
-          <div data-tp="modal" style={{ ...s.modal, width: 580 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <h3 style={s.modalTitle}>{openMsg.subject || '(sin asunto)'}</h3>
-              <button onClick={() => setOpenMsg(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: C.muted, lineHeight: 1 }}>✕</button>
-            </div>
-            <div style={{ fontSize: 12, color: C.muted, display: 'flex', flexDirection: 'column', gap: 3 }}>
-              <div><strong style={{ color: C.text }}>{openMsg.direction === 'sent' ? 'Para' : 'De'}:</strong> {openMsg.counterparty_name || ''} &lt;{openMsg.direction === 'sent' ? openMsg.recipient_email : (openMsg.sender_email || '')}&gt;</div>
-              <div><strong style={{ color: C.text }}>Fecha:</strong> {fmtDate(openMsg.created_at)} · <strong style={{ color: C.text }}>Estado:</strong> {openMsg.status}{openMsg.sent_at ? ` · Enviado: ${fmtDate(openMsg.sent_at)}` : ''}</div>
-            </div>
-            {openMsg.error && (
-              <div style={{ background: C.dangerLight, border: `1px solid ${C.danger}`, color: '#7F1D1D', borderRadius: 8, padding: '10px 12px', fontSize: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 4 }}>El envío SMTP falló</div>
-                <code style={{ fontFamily: 'monospace', fontSize: 11, color: C.danger }}>{openMsg.error}</code>
-                <div style={{ marginTop: 6, fontSize: 11, color: C.muted }}>
-                  Revisa la configuración en <strong>Panel admin → Configuración → Correo SMTP</strong> o pide al admin que mire los logs del servidor.
-                </div>
-              </div>
-            )}
-            <div className="worsyn-rich-render" style={{ margin: 0, fontFamily: 'inherit', fontSize: 13, color: C.text, lineHeight: 1.6, background: '#fff', border: `1px solid ${C.border}`, padding: '14px 16px', borderRadius: 8, maxHeight: '50vh', overflow: 'auto' }}
-              dangerouslySetInnerHTML={{ __html: openMsg.body }} />
-            <div style={s.modalActions}>
-              <button style={{ ...s.btnGhost, color: C.danger, borderColor: 'rgba(239,68,68,.3)' }} onClick={() => deleteMsg(openMsg)}>Eliminar</button>
-              <button style={s.btnPrimary} onClick={() => setOpenMsg(null)}>Cerrar</button>
-            </div>
-          </div>
+      <div className="row rise rise-d1" style={{ gap: 8, marginBottom: 'var(--gap)' }}>
+        <div className="seg">
+          <button className="seg-btn is-active">Todo</button>
+          <button className="seg-btn">Imágenes</button>
+          <button className="seg-btn">Vídeo</button>
+          <button className="seg-btn">Audio</button>
+          <button className="seg-btn">Documentos</button>
         </div>
-      )}
-
-      {showModulePermsStub && (
-        <div style={s.overlay} onClick={e => e.target === e.currentTarget && setShowModulePermsStub(false)}>
-          <div style={{ ...s.modal, width: 480 }}>
-            <h3 style={s.modalTitle}>Permisos por módulo</h3>
-            <div style={{ background: '#FEF3C7', border: '1px solid #FCD34D', color: '#92400E', borderRadius: 8, padding: 14, fontSize: 13, lineHeight: 1.55 }}>
-              <strong>Próximamente.</strong> Aquí podrás afinar el acceso por módulo
-              (Servicios, Canciones, Media, Eventos, Calendario, Finanzas) por separado
-              y por tipo de servicio. Esta funcionalidad se implementará en la Fase 3
-              cuando todos los módulos estén operativos.
-            </div>
-            <div style={s.modalActions}>
-              <button style={s.btnPrimary} onClick={() => setShowModulePermsStub(false)}>Entendido</button>
-            </div>
-          </div>
+        <div style={{ flex: 1 }}/>
+        <button className="btn btn-secondary btn-sm"><I.Sort size={13}/> Más recientes</button>
+        <div className="seg">
+          <button onClick={() => setView('grid')} className={'seg-btn' + (view === 'grid' ? ' is-active' : '')}><I.Photo size={13}/></button>
+          <button onClick={() => setView('list')} className={'seg-btn' + (view === 'list' ? ' is-active' : '')}><I.Menu size={13}/></button>
         </div>
-      )}
-    </main>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PersonasView — full People / Teams management
-// ─────────────────────────────────────────────────────────────────────────────
-function PersonasView({ slug, teams, setTeams, types, resetSignal }: {
-  slug: string
-  teams: Team[]
-  setTeams: React.Dispatch<React.SetStateAction<Team[]>>
-  types: ServiceType[]
-  resetSignal?: number
-}) {
-  const [tab, setTab] = useState<'personas' | 'equipos'>('personas')
-  const [editingTeam, setEditingTeam] = useState<Team | null | undefined>(undefined)
-  const [people, setPeople] = useState<ServicePerson[]>([])
-  const [orgMembers, setOrgMembers] = useState<OrgMemberLite[]>([])
-  const [loading, setLoading] = useState(true)
-  const [wizardOpen, setWizardOpen] = useState(false)
-  const [currentMemberId, setCurrentMemberId] = useState<string | null>(null)
-  const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null)
-  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null)
-
-  const reloadPeople = useCallback(async () => {
-    setLoading(true)
-    try {
-      const [p, om, me] = await Promise.all([
-        api(`/api/v1/tenant/${slug}/services/people`).then(r => r.ok ? r.json() : []).catch(() => []),
-        api(`/api/v1/tenant/${slug}/members`).then(r => r.ok ? r.json() : []).catch(() => []),
-        api(`/api/v1/tenant/${slug}/auth/me`).then(r => r.ok ? r.json() : null).catch(() => null),
-      ])
-      setPeople(p); setOrgMembers(om); setCurrentMemberId(me?.id ?? null)
-    } finally { setLoading(false) }
-  }, [slug])
-
-  useEffect(() => { reloadPeople() }, [reloadPeople])
-
-  // Top sub-tab click resets internal detail/selection state so clicking
-  // "Personas" while viewing a person returns to the list (same for future
-  // team-detail when implemented). Skips initial mount (resetSignal undefined).
-  useEffect(() => {
-    if (resetSignal === undefined) return
-    setSelectedPersonId(null)
-    setSelectedTeamId(null)
-  }, [resetSignal])
-
-  const existingMemberIds = useMemo(() => new Set(people.map(p => p.member_id)), [people])
-
-  async function deleteTeam(id: string) {
-    if (!confirm('¿Eliminar este equipo?')) return
-    const res = await api(`/api/v1/tenant/${slug}/teams/${id}`, { method: 'DELETE' })
-    if (res.ok) setTeams(prev => prev.filter(t => t.id !== id))
-  }
-  async function deletePerson(p: ServicePerson) {
-    if (!confirm(`¿Eliminar a ${p.full_name || p.email} del módulo Servicios?\nNo se elimina del módulo Miembros.`)) return
-    const res = await api(`/api/v1/tenant/${slug}/services/people/${p.id}`, { method: 'DELETE' })
-    if (res.ok) { setPeople(prev => prev.filter(x => x.id !== p.id)); return }
-    const j = await res.json().catch(() => ({}))
-    alert(j.detail || 'Error al eliminar')
-  }
-  async function changeRole(p: ServicePerson, role: ServiceRole) {
-    const res = await api(`/api/v1/tenant/${slug}/services/people/${p.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ service_role: role }),
-    })
-    if (res.ok) {
-      const updated = await res.json() as ServicePerson
-      setPeople(prev => prev.map(x => x.id === p.id ? updated : x))
-    }
-  }
-  async function resendWelcome(p: ServicePerson) {
-    const res = await api(`/api/v1/tenant/${slug}/services/people/${p.id}/welcome`, { method: 'POST' })
-    if (!res.ok) { alert('Error al enviar bienvenida'); return }
-    const j = await res.json()
-    if (j.temp_password) {
-      alert(`Contraseña temporal para ${j.email}:\n\n${j.temp_password}\n\nCópiala y compártela ahora — no se mostrará otra vez.`)
-    } else {
-      alert(`Bienvenida marcada. ${j.email} ya tiene contraseña configurada.`)
-    }
-    reloadPeople()
-  }
-  // TEST-ONLY: force-reset password and pop the new one for manual login testing
-  async function resetPasswordDebug(p: ServicePerson) {
-    if (!confirm(`(Test) Regenerar contraseña para ${p.full_name || p.email}?`)) return
-    const res = await api(`/api/v1/tenant/${slug}/services/people/${p.id}/reset-password`, { method: 'POST' })
-    if (!res.ok) { const j = await res.json().catch(() => ({})); alert(j.detail || 'Error'); return }
-    const j = await res.json()
-    alert(`Nueva contraseña para ${j.email}:\n\n${j.debug_password}`)
-    reloadPeople()
-  }
-
-  // Detail view takes over when a person is selected
-  const selected = selectedPersonId ? people.find(p => p.id === selectedPersonId) : null
-  if (selected) {
-    return (
-      <PersonDetailView slug={slug} person={selected} allTeams={teams}
-        onBack={() => setSelectedPersonId(null)}
-        onChanged={updated => setPeople(prev => prev.map(x => x.id === updated.id ? updated : x))} />
-    )
-  }
-
-  const selectedTeam = selectedTeamId ? teams.find(t => t.id === selectedTeamId) : null
-  if (selectedTeam) {
-    return (
-      <TeamDetailView slug={slug} team={selectedTeam} allTeams={teams}
-        orgMembers={orgMembers} types={types} currentMemberId={currentMemberId}
-        onPeopleInvalidate={reloadPeople}
-        onOpenPerson={pid => { setSelectedTeamId(null); setSelectedPersonId(pid) }}
-        onBack={() => { setSelectedTeamId(null); reloadPeople() }}
-        onTeamChanged={t => setTeams(prev => prev.map(x => x.id === t.id ? t : x))}
-        onTeamDeleted={id => { setTeams(prev => prev.filter(x => x.id !== id)); setSelectedTeamId(null) }} />
-    )
-  }
-
-  return (
-    <main style={s.main}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <h2 style={s.mainTitle}>Personas</h2>
-        {tab === 'equipos'
-          ? <button style={s.btnPrimary} onClick={() => setEditingTeam(null)}>+ Nuevo equipo</button>
-          : <button style={s.btnPrimary} onClick={() => setWizardOpen(true)}>+ Añadir persona</button>}
       </div>
 
-      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${C.border}` }}>
-        {(['personas', 'equipos'] as const).map(t => {
-          const active = tab === t
-          return (
-            <button key={t} onClick={() => setTab(t)}
-              style={{
-                background: 'none', border: 'none', cursor: 'pointer',
-                padding: '8px 16px', fontSize: 13, fontWeight: 600,
-                color: active ? C.primary : C.muted,
-                borderBottom: `2px solid ${active ? C.primary : 'transparent'}`,
-                marginBottom: -1,
-              }}>
-              {t === 'personas' ? 'Personas' : 'Equipos'}
-            </button>
-          )
-        })}
-      </div>
-
-      {tab === 'personas' && (
-        <>
-          {loading ? (
-            <div style={{ padding: 32, textAlign: 'center', color: C.muted, fontSize: 13 }}>Cargando…</div>
-          ) : people.length === 0 ? (
-            <div style={{ background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10, padding: '40px 16px', textAlign: 'center' }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 }}>Aún no hay personas en Servicios</div>
-              <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>
-                Añade voluntarios y líderes para gestionar sus permisos en el módulo.
-              </div>
-              <button style={s.btnPrimary} onClick={() => setWizardOpen(true)}>+ Añadir primera persona</button>
-            </div>
-          ) : (
-            <div data-tp="table-wrap" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden' }}>
-              <table style={s.planTable}>
-                <thead>
-                  <tr>
-                    <th style={s.planTh}>Nombre</th>
-                    <th style={s.planTh}>Email</th>
-                    <th style={s.planTh}>Permisos en Servicios</th>
-                    <th style={s.planTh}>Estado</th>
-                    <th style={s.planTh}>Bienvenida</th>
-                    <th style={{ ...s.planTh, background: '#FEF3C7', color: '#92400E' }}>Contraseña (test)</th>
-                    <th style={s.planTh}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {people.map(p => (
-                    <tr key={p.id} style={{ cursor: 'pointer' }}
-                      onClick={() => setSelectedPersonId(p.id)}>
-                      <td style={s.planTd}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <div style={{ width: 30, height: 30, borderRadius: 999, background: p.avatar ? `url(${p.avatar}) center/cover` : C.soft, color: C.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
-                            {!p.avatar && (p.full_name?.[0]?.toUpperCase() || p.email[0]?.toUpperCase())}
-                          </div>
-                          <div>
-                            <div style={{ fontWeight: 600, color: C.text }}>{p.full_name || '—'}</div>
-                            {p.org_role === 'admin' && <div style={{ ...s.pill, background: C.successLight, color: C.success, fontSize: 10, padding: '1px 7px', marginTop: 2 }}>Admin de org</div>}
-                          </div>
-                        </div>
-                      </td>
-                      <td style={{ ...s.planTd, color: C.muted, fontSize: 12 }}>{p.email}</td>
-                      <td style={s.planTd} onClick={e => e.stopPropagation()}>
-                        <select value={p.service_role} onChange={e => changeRole(p, e.target.value as ServiceRole)}
-                          style={{ ...s.select, padding: '4px 8px', fontSize: 12 }}>
-                          {(['administrator', 'editor', 'coordinator', 'viewer', 'scheduled_viewer'] as ServiceRole[]).map(r => (
-                            <option key={r} value={r}>{SERVICE_ROLE_LABEL[r]}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td style={s.planTd}>
-                        {p.is_active === false
-                          ? <span style={{ ...s.pill, background: '#FEE2E2', color: '#991B1B', border: '1px solid #FCA5A5', fontWeight: 700 }}>Deshabilitado</span>
-                          : <span style={{ ...s.pill, background: C.successLight, color: C.success, fontWeight: 600 }}>Habilitado</span>}
-                      </td>
-                      <td style={s.planTd}>
-                        {p.welcomed_at
-                          ? <span style={{ ...s.pill, background: C.successLight, color: C.success, fontWeight: 600 }}>Bienvenido</span>
-                          : <span style={{ ...s.pill, background: '#FEF3C7', color: '#92400E', border: '1px solid #FCD34D', fontWeight: 600 }}>Pendiente</span>}
-                      </td>
-                      <td style={{ ...s.planTd, background: '#FFFBEB', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
-                        {p.org_role === 'admin'
-                          ? <span style={{ fontSize: 11, color: C.muted, fontStyle: 'italic' }}>contraseña del tenant</span>
-                          : p.debug_password
-                            ? (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                  <code style={{ fontSize: 12, fontFamily: 'monospace', fontWeight: 700, color: '#92400E', background: '#FEF3C7', padding: '2px 6px', borderRadius: 4, letterSpacing: '0.04em' }}>{p.debug_password}</code>
-                                  <button onClick={() => navigator.clipboard?.writeText(p.debug_password!)}
-                                    title="Copiar contraseña"
-                                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, padding: 2, lineHeight: 1 }}>
-                                    <svg viewBox="0 0 16 16" fill="currentColor" width={12} height={12}><path d="M4 1.5A1.5 1.5 0 015.5 0h5A1.5 1.5 0 0112 1.5V2h.5A1.5 1.5 0 0114 3.5v11A1.5 1.5 0 0112.5 16h-9A1.5 1.5 0 012 14.5v-11A1.5 1.5 0 013.5 2H4v-.5zM5 2h6v-.5a.5.5 0 00-.5-.5h-5a.5.5 0 00-.5.5V2z"/></svg>
-                                  </button>
-                                </div>
-                              )
-                            : <span style={{ fontSize: 11, color: C.muted }}>—</span>}
-                      </td>
-                      <td style={{ ...s.planTd, textAlign: 'right', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
-                        {p.org_role !== 'admin' && (
-                          <>
-                            <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, marginRight: 6 }} onClick={() => resendWelcome(p)}>
-                              {p.welcomed_at ? 'Reenviar bienvenida' : 'Enviar bienvenida'}
-                            </button>
-                            <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, marginRight: 6, color: '#92400E', borderColor: '#FCD34D', background: '#FFFBEB' }}
-                              onClick={() => resetPasswordDebug(p)}
-                              title="(Test) Genera nueva contraseña y la muestra">Reset pw</button>
-                          </>
-                        )}
-                        {(() => {
-                          const isSelfAdmin = p.org_role === 'admin' && p.member_id === currentMemberId
-                          return (
-                            <button
-                              style={{
-                                ...s.btnGhost, padding: '4px 10px', fontSize: 12,
-                                color: isSelfAdmin ? C.light : C.danger,
-                                borderColor: isSelfAdmin ? C.border : 'rgba(239,68,68,.3)',
-                                cursor: isSelfAdmin ? 'not-allowed' : 'pointer',
-                                opacity: isSelfAdmin ? 0.55 : 1,
-                              }}
-                              disabled={isSelfAdmin}
-                              title={isSelfAdmin ? 'No puedes eliminarte a ti mismo. Otro administrador debe hacerlo.' : ''}
-                              onClick={() => !isSelfAdmin && deletePerson(p)}>
-                              Eliminar
-                            </button>
-                          )
-                        })()}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
-      )}
-
-      {tab === 'equipos' && (
-        <>
-          {teams.length === 0 ? (
-            <div style={{ background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10, padding: '40px 16px', textAlign: 'center' }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 }}>Aún no hay equipos</div>
-              <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>
-                Crea equipos como Adoración, Audio/Visual o Recibo para asignarlos a tus servicios.
-              </div>
-              <button style={s.btnPrimary} onClick={() => setEditingTeam(null)}>+ Crear primer equipo</button>
-            </div>
-          ) : (
-            <div data-tp="table-wrap" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden' }}>
-              <table style={s.planTable}>
-                <thead>
-                  <tr>
-                    <th style={s.planTh}>Equipo</th>
-                    <th style={s.planTh}>Tipo</th>
-                    <th style={s.planTh}>Líderes</th>
-                    <th style={s.planTh}>Miembros</th>
-                    <th style={s.planTh}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {teams.map(t => {
-                    const badges: { label: string; color: string; bg: string }[] = []
-                    if (t.is_rehearsal) badges.push({ label: 'Ensayo', color: '#1D4ED8', bg: '#DBEAFE' })
-                    if (t.is_secure) badges.push({ label: 'Seguro', color: '#92400E', bg: '#FEF3C7' })
-                    if (t.is_split) badges.push({ label: 'Dividido', color: '#6B21A8', bg: '#F3E8FF' })
-                    const leaderCount = t.leader_member_ids?.length || 0
-                    return (
-                      <tr key={t.id}
-                        style={{ cursor: 'pointer', transition: 'background 0.12s' }}
-                        onMouseEnter={e => (e.currentTarget.style.background = C.soft)}
-                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                        onClick={() => setSelectedTeamId(t.id)}>
-                        <td style={s.planTd}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                            <div style={{ width: 10, height: 10, borderRadius: 3, background: t.color || C.primary, flexShrink: 0 }} />
-                            <div>
-                              <div style={{ fontWeight: 600, color: C.text }}>{t.name}</div>
-                              {t.description && <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{t.description}</div>}
-                            </div>
-                          </div>
-                        </td>
-                        <td style={s.planTd}>
-                          {badges.length === 0
-                            ? <span style={{ fontSize: 11, color: C.muted }}>—</span>
-                            : (
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                                {badges.map(b => (
-                                  <span key={b.label} style={{ ...s.pill, background: b.bg, color: b.color, fontSize: 10 }}>{b.label}</span>
-                                ))}
-                              </div>
-                            )}
-                        </td>
-                        <td style={{ ...s.planTd, color: C.muted, fontSize: 12 }}>{leaderCount}</td>
-                        <td style={{ ...s.planTd, color: C.muted, fontSize: 12 }}>{t.member_count}</td>
-                        <td style={{ ...s.planTd, textAlign: 'right' }} onClick={e => e.stopPropagation()}>
-                          <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, marginRight: 6 }} onClick={() => setEditingTeam(t)}>Editar</button>
-                          <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, color: C.danger, borderColor: 'rgba(239,68,68,.3)' }} onClick={() => deleteTeam(t.id)}>Eliminar</button>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
-      )}
-
-      {editingTeam !== undefined && (
-        <TeamFormModal slug={slug} initial={editingTeam}
-          orgMembers={orgMembers} types={types} currentMemberId={currentMemberId}
-          onSaved={t => {
-            setTeams(prev => editingTeam ? prev.map(x => x.id === t.id ? t : x) : [...prev, t])
-            setEditingTeam(undefined)
-          }}
-          onClose={() => setEditingTeam(undefined)} />
-      )}
-
-      {wizardOpen && (
-        <AddPersonWizard slug={slug} types={types} orgMembers={orgMembers} existingMemberIds={existingMemberIds}
-          onCreated={p => { setPeople(prev => [p, ...prev]) }}
-          onClose={() => { setWizardOpen(false); reloadPeople() }} />
-      )}
-    </main>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Team Detail View — tabs (Settings / Members / Automations) + positions
-// ─────────────────────────────────────────────────────────────────────────────
-
-interface TeamPerson {
-  member_id: string
-  full_name: string | null
-  email: string
-  avatar: string | null
-  preferences: { max_per_month: number | null; max_per_day: number | null }
-}
-interface TeamPositionInfo {
-  id: string
-  name: string
-  sort_order: number
-  member_count: number
-  members: TeamPerson[]
-}
-interface TeamDetailPayload {
-  team: Team
-  leaders: TeamPerson[]
-  positions: TeamPositionInfo[]
-  all_members: TeamPerson[]
-}
-
-function escapeHtml(str: string) {
-  return (str || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!))
-}
-
-function printTeamRoster(team: Team, title: string, items: TeamPerson[]) {
-  const w = window.open('', '_blank', 'width=800,height=900')
-  if (!w) { alert('Permite ventanas emergentes para imprimir.'); return }
-  const rows = items.map(p => {
-    const parts = (p.full_name || '').split(' ')
-    const first = parts[0] || ''
-    const last = parts.slice(1).join(' ')
-    const m = p.preferences.max_per_month, d = p.preferences.max_per_day
-    const pref = (m == null && d == null) ? 'Sin límite' : `${m != null ? m + '/mes' : '—'} · ${d != null ? d + '/día' : '—'}`
-    return `<tr><td>${escapeHtml(first || '—')}</td><td>${escapeHtml(last || '—')}</td><td>${escapeHtml(p.email)}</td><td>${escapeHtml(pref)}</td></tr>`
-  }).join('')
-  const empty = `<tr><td colspan="4" style="color:#94A3B8; text-align:center; padding:18px">Sin personas en esta vista.</td></tr>`
-  w.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${escapeHtml(team.name)} · ${escapeHtml(title)}</title>
-<style>
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #1F2937; margin: 32px; }
-.brand { display:flex; align-items:center; gap:12px; margin-bottom:22px; padding-bottom: 14px; border-bottom: 2px solid #4F46E5; }
-.brand .dot { width: 28px; height: 28px; border-radius: 8px; background: ${team.color || '#4F46E5'}; }
-.brand .name { font-size: 22px; font-weight: 700; }
-.brand .by { margin-left:auto; color:#94A3B8; font-size:11px; letter-spacing:0.15em; text-transform:uppercase; font-weight:700 }
-h1 { font-size: 18px; margin: 0 0 4px; color:#1F2937 }
-.sub { color:#64748B; font-size:13px; margin-bottom: 22px }
-table { width:100%; border-collapse: collapse; font-size: 13px; }
-th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #E2E8F0; }
-th { background:#F1F5F9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color:#475569 }
-tr:last-child td { border-bottom: none; }
-.footer { margin-top: 28px; font-size: 11px; color:#94A3B8; text-align: center; }
-@media print { .noprint { display: none } body { margin: 16mm } }
-</style></head><body>
-<div class="brand">
-  <div class="dot"></div>
-  <div class="name">${escapeHtml(team.name)}</div>
-  <div class="by">Worsyn · Servicios</div>
-</div>
-<h1>${escapeHtml(title)}</h1>
-<div class="sub">${items.length} ${items.length === 1 ? 'persona' : 'personas'} · generado ${new Date().toLocaleString('es-ES')}</div>
-<table>
-  <thead><tr><th>Nombre</th><th>Apellido</th><th>Email</th><th>Preferencias</th></tr></thead>
-  <tbody>${rows || empty}</tbody>
-</table>
-<div class="footer">Generado desde Worsyn · ${escapeHtml(team.name)}</div>
-<div class="noprint" style="margin-top:20px; text-align:center"><button onclick="window.print()" style="background:#4F46E5;color:white;border:0;padding:10px 18px;border-radius:8px;font-size:13px;cursor:pointer">Imprimir / Guardar como PDF</button></div>
-<script>setTimeout(function(){window.print()}, 300)</script>
-</body></html>`)
-  w.document.close()
-}
-
-function SidebarItem({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
-  return (
-    <button onClick={onClick}
-      style={{
-        width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        gap: 8, padding: '8px 10px', borderRadius: 6,
-        background: active ? 'rgba(79,70,229,0.08)' : 'transparent',
-        border: 'none', cursor: 'pointer', color: active ? C.primary : C.text,
-        fontSize: 13, fontWeight: active ? 600 : 500, textAlign: 'left' as const,
-      }}>
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
-      <span style={{
-        background: active ? C.primary : C.soft, color: active ? '#fff' : C.muted,
-        fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 999, minWidth: 18, textAlign: 'center' as const,
-      }}>{count}</span>
-    </button>
-  )
-}
-
-function IconBtn({ children, onClick, title, disabled, danger }: {
-  children: React.ReactNode; onClick: () => void; title: string; disabled?: boolean; danger?: boolean
-}) {
-  return (
-    <button onClick={onClick} title={title} disabled={disabled}
-      style={{
-        width: 32, height: 32, borderRadius: 6, border: `1px solid ${C.border}`,
-        background: C.surface, color: disabled ? C.light : (danger ? C.danger : C.text),
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        opacity: disabled ? 0.5 : 1,
-      }}>{children}</button>
-  )
-}
-
-function AddPositionModal({ slug, teamId, existingNames, onCreated, onClose }: {
-  slug: string; teamId: string; existingNames: string[]
-  onCreated: (p: TeamPositionInfo) => void; onClose: () => void
-}) {
-  useEscape(onClose)
-  const [name, setName] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
-  async function submit(e: React.FormEvent) {
-    e.preventDefault()
-    const n = name.trim()
-    if (!n) { setErr('Nombre requerido'); return }
-    if (existingNames.some(x => x.toLowerCase() === n.toLowerCase())) { setErr('Ya existe una posición con ese nombre'); return }
-    setBusy(true); setErr('')
-    const r = await api(`/api/v1/tenant/${slug}/teams/${teamId}/positions`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: n }),
-    })
-    if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); setBusy(false); return }
-    onCreated(await r.json())
-    onClose()
-  }
-  return (
-    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <form style={{ ...s.modal, width: 420 }} onSubmit={submit}>
-        <h3 style={s.modalTitle}>Añadir posición</h3>
-        <p style={{ fontSize: 12, color: C.muted, margin: '-6px 0 6px' }}>
-          Las posiciones agrupan a las personas por rol (Piano, Bajo, Guitarra acústica, etc.). Crea las que necesites.
-        </p>
-        <label style={s.label}>
-          Nombre de la posición
-          <input style={s.input} autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="p. ej. Piano" />
-        </label>
-        {err && <p style={s.errorText}>{err}</p>}
-        <div style={s.modalActions}>
-          <button type="button" style={s.btnGhost} onClick={onClose}>Cancelar</button>
-          <button type="submit" disabled={busy} style={s.btnPrimary}>{busy ? '…' : 'Crear posición'}</button>
-        </div>
-      </form>
-    </div>
-  )
-}
-
-function AddLeaderModal({ slug, teamId, orgMembers, excludedIds, onAdded, onClose }: {
-  slug: string; teamId: string
-  orgMembers: OrgMemberLite[]
-  excludedIds: Set<string>
-  onAdded: (t: Team) => void
-  onClose: () => void
-}) {
-  useEscape(onClose)
-  const [search, setSearch] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
-
-  const candidates = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    return orgMembers
-      .filter(m => !excludedIds.has(m.id) && (!q || (m.full_name || '').toLowerCase().includes(q) || m.email.toLowerCase().includes(q)))
-      .sort((a, b) => (a.full_name || a.email).toLowerCase().localeCompare((b.full_name || b.email).toLowerCase(), 'es'))
-  }, [orgMembers, excludedIds, search])
-
-  async function pick(memberId: string) {
-    setBusy(true); setErr('')
-    const r = await api(`/api/v1/tenant/${slug}/teams/${teamId}/leaders`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ member_id: memberId }),
-    })
-    if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); setBusy(false); return }
-    onAdded(await r.json() as Team)
-  }
-
-  return (
-    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={{ ...s.modal, width: 460, maxHeight: '80vh' }}>
-        <h3 style={s.modalTitle}>Añadir líder</h3>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por nombre o email…"
-          style={{ ...s.input, marginBottom: 10 }} autoFocus />
-        <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, maxHeight: 360, overflowY: 'auto' }}>
-          {candidates.length === 0 ? (
-            <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>No hay personas disponibles</div>
-          ) : candidates.map(m => (
-            <button key={m.id} disabled={busy} onClick={() => pick(m.id)}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', width: '100%',
-                background: 'none', border: 'none', borderBottom: `1px solid ${C.border}`, cursor: busy ? 'wait' : 'pointer',
-                textAlign: 'left' as const, transition: 'background 0.12s' }}
-              onMouseEnter={e => !busy && (e.currentTarget.style.background = C.soft)}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-              <div style={{ width: 26, height: 26, borderRadius: 999, background: m.avatar ? `url(${m.avatar}) center/cover` : C.soft, color: C.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
-                {!m.avatar && (m.full_name?.[0]?.toUpperCase() || m.email[0]?.toUpperCase())}
+      <div className="grid grid-12 rise rise-d2" style={{ marginBottom: 'var(--gap)' }}>
+        {folders.map(f => (
+          <article key={f.name} className="col-4 card" style={{ overflow: 'hidden', cursor: 'pointer' }}>
+            <div style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div className="av av-lg" data-c={f.c} style={{ borderRadius: 10 }}>
+                <I.Folder size={16}/>
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 500, color: C.text, fontSize: 13 }}>{m.full_name || '—'}</div>
-                <div style={{ fontSize: 11, color: C.muted }}>{m.email}</div>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>{f.name}</div>
+                <div className="mono" style={{ fontSize: 12, color: 'var(--text-3)' }}>{f.count} archivos</div>
               </div>
-            </button>
-          ))}
-        </div>
-        {err && <p style={s.errorText}>{err}</p>}
-        <div style={s.modalActions}>
-          <button type="button" style={s.btnGhost} onClick={onClose}>Cancelar</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function AddPersonsToPositionModal({ slug, teamId, position, orgMembers, serviceMemberIds, excludedIds, onDone, onClose }: {
-  slug: string; teamId: string; position: TeamPositionInfo
-  orgMembers: OrgMemberLite[]
-  serviceMemberIds: Set<string>
-  excludedIds: Set<string>
-  onDone: (newlyEnrolled: ServicePerson[], alreadyEnrolledAdded: ServicePerson[]) => void
-  onClose: () => void
-}) {
-  useEscape(onClose)
-  const [search, setSearch] = useState('')
-  const [picked, setPicked] = useState<Set<string>>(new Set())
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
-
-  const candidates = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    return orgMembers
-      .filter(m => !excludedIds.has(m.id) && (!q || (m.full_name || '').toLowerCase().includes(q) || m.email.toLowerCase().includes(q)))
-      .sort((a, b) => (a.full_name || a.email).toLowerCase().localeCompare((b.full_name || b.email).toLowerCase(), 'es'))
-  }, [orgMembers, excludedIds, search])
-
-  function toggle(id: string) {
-    setPicked(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
-  }
-
-  // Count picked who are NOT yet in Services (excluding admins — backend skips them)
-  const pickedNewToServices = useMemo(() => {
-    const out: string[] = []
-    picked.forEach(id => {
-      const m = orgMembers.find(x => x.id === id)
-      if (m && !serviceMemberIds.has(id) && m.role !== 'admin') out.push(id)
-    })
-    return out
-  }, [picked, orgMembers, serviceMemberIds])
-
-  async function submit() {
-    if (picked.size === 0) { setErr('Selecciona al menos una persona'); return }
-    setBusy(true); setErr('')
-    const r = await api(`/api/v1/tenant/${slug}/teams/${teamId}/positions/${position.id}/members`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ member_ids: Array.from(picked) }),
-    })
-    if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); setBusy(false); return }
-    const out = await r.json()
-    const mk = (x: any, enrolledRole = 'viewer'): ServicePerson => ({
-      id: x.service_member_id || x.member_id, member_id: x.member_id,
-      full_name: x.full_name, email: x.email,
-      avatar: null, org_role: 'member',
-      service_role: enrolledRole as any, songs_role: 'viewer', media_role: 'viewer',
-      file_access: { plans: true, songs: true, media: true },
-      type_permissions: [], welcomed_at: null, password_set: false,
-    } as ServicePerson)
-    const newly: ServicePerson[] = (out.newly_enrolled || []).map((x: any) => mk(x))
-    // Picked who were already in Services AND were truly added to this position (not skipped duplicates)
-    const newlyIds = new Set(newly.map(n => n.member_id))
-    const addedIds: string[] = out.added || []
-    const skippedIds = new Set<string>(out.skipped || [])
-    const already: ServicePerson[] = []
-    for (const id of addedIds) {
-      if (newlyIds.has(id) || skippedIds.has(id)) continue
-      const m = orgMembers.find(x => x.id === id)
-      if (m && m.role !== 'admin') {
-        already.push(mk({ member_id: m.id, full_name: m.full_name, email: m.email }))
-      }
-    }
-    onDone(newly, already)
-  }
-
-  return (
-    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={{ ...s.modal, width: 520, maxHeight: '80vh' }}>
-        <h3 style={s.modalTitle}>Añadir personas a {position.name}</h3>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por nombre o email…"
-          style={{ ...s.input, marginBottom: 10 }} autoFocus />
-        <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, maxHeight: 340, overflowY: 'auto' }}>
-          {candidates.length === 0 ? (
-            <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>
-              {orgMembers.length === excludedIds.size
-                ? 'Todas las personas ya están en esta posición.'
-                : 'No hay coincidencias.'}
+              <span className="list-chev"><I.Chev/></span>
             </div>
-          ) : candidates.map(m => {
-            const checked = picked.has(m.id)
-            const isNewToServices = !serviceMemberIds.has(m.id) && m.role !== 'admin'
+          </article>
+        ))}
+      </div>
+
+      {view === 'grid' ? (
+        <div className="grid grid-12 rise rise-d3">
+          {SEED.media.map(m => {
+            const [c1, c2] = MEDIA_COLORS[m.kind]
+            const Ic = I[MEDIA_ICON[m.kind]] as (p: { size?: number; style?: React.CSSProperties }) => JSX.Element
             return (
-              <div key={m.id} onClick={() => toggle(m.id)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
-                  cursor: 'pointer', borderBottom: `1px solid ${C.border}`,
-                  background: checked ? 'rgba(79,70,229,0.06)' : 'transparent',
-                  transition: 'background 0.12s',
+              <article key={m.id} className="col-3 card" style={{ overflow: 'hidden', cursor: 'pointer' }}>
+                <div style={{
+                  aspectRatio: '4 / 3',
+                  background: `linear-gradient(135deg, ${c1}, ${c2})`,
+                  display: 'grid', placeItems: 'center', position: 'relative',
                 }}>
-                <input type="checkbox" checked={checked} readOnly />
-                <div style={{ width: 26, height: 26, borderRadius: 999, background: m.avatar ? `url(${m.avatar}) center/cover` : C.soft, color: C.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
-                  {!m.avatar && (m.full_name?.[0]?.toUpperCase() || m.email[0]?.toUpperCase())}
+                  <Ic size={28}/>
+                  <span className="chip" style={{ position: 'absolute', top: 10, left: 10, background: 'rgba(255,255,255,0.18)', color: '#fff', border: 0, backdropFilter: 'blur(10px)' }}>
+                    {m.tag}
+                  </span>
                 </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontWeight: 500, color: C.text, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.full_name || '—'}</span>
-                    {isNewToServices && (
-                      <span style={{
-                        fontSize: 10, fontWeight: 700, color: C.warning, background: '#FEF3C7',
-                        border: '1px solid #FCD34D', borderRadius: 999, padding: '1px 7px',
-                        letterSpacing: '0.04em', textTransform: 'uppercase',
-                      }} title="Esta persona aún no está en Servicios — se le dará de alta con permisos por defecto y se abrirá el correo de bienvenida.">
-                        ✦ Nuevo en Servicios
-                      </span>
-                    )}
+                <div style={{ padding: '12px 14px' }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div>
+                  <div className="row-between" style={{ marginTop: 4 }}>
+                    <div className="mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{m.size}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{m.when}</div>
                   </div>
-                  <div style={{ fontSize: 11, color: C.muted }}>{m.email}</div>
+                </div>
+              </article>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="card rise rise-d3">
+          {SEED.media.map(m => {
+            const [c1, c2] = MEDIA_COLORS[m.kind]
+            const Ic = I[MEDIA_ICON[m.kind]] as (p: { size?: number }) => JSX.Element
+            return (
+              <div key={m.id} className="list-row" style={{ borderRadius: 0 }}>
+                <div style={{ width: 40, height: 40, borderRadius: 9, background: `linear-gradient(135deg, ${c1}, ${c2})`, display: 'grid', placeItems: 'center', color: '#fff' }}>
+                  <Ic size={16}/>
+                </div>
+                <div className="list-body">
+                  <div className="list-title">{m.name}</div>
+                  <div className="list-sub">{m.tag} · {m.size} · {m.when}</div>
+                </div>
+                <div className="list-trail">
+                  <button className="icon-btn"><I.Down size={14}/></button>
+                  <button className="icon-btn"><I.Dots size={14}/></button>
                 </div>
               </div>
             )
           })}
         </div>
-        <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>{picked.size} seleccionada{picked.size === 1 ? '' : 's'}</div>
-        {pickedNewToServices.length > 0 && (
-          <div style={{
-            marginTop: 8, padding: '10px 12px', borderRadius: 8,
-            background: '#FEF3C7', border: '1px solid #FCD34D',
-            fontSize: 12, color: '#92400E', lineHeight: 1.45,
-          }}>
-            <strong>{pickedNewToServices.length}</strong> {pickedNewToServices.length === 1 ? 'persona' : 'personas'} todavía no {pickedNewToServices.length === 1 ? 'está' : 'están'} en Servicios.
-            Al añadir, se {pickedNewToServices.length === 1 ? 'le dará' : 'les dará'} de alta con permisos por defecto (espectador) y se abrirá el correo de <strong>bienvenida</strong> para que lo revises antes de enviar.
+      )}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Personas (port of screens-c.jsx::Personas) — wires real /services/people
+// ─────────────────────────────────────────────────────────────────────────────
+interface ApiServicePerson {
+  id: string; member_id: string
+  full_name: string | null; email: string
+  avatar: string | null; org_role: string
+  service_role: string
+  welcomed_at: string | null
+  is_active?: boolean
+}
+
+interface UiPersona {
+  id: string; name: string; email: string; role: 'admin'|'leader'|'member';
+  active: boolean; joined: string; team: string; phone: string; c: number; lastSeen: string;
+}
+
+const ROLE_LABEL: Record<UiPersona['role'], string> = { admin: 'Admin', leader: 'Líder', member: 'Miembro' }
+
+function PersonaInitials(name: string) {
+  return name.split(' ').filter(Boolean).slice(0,2).map(w => w[0]).join('').toUpperCase()
+}
+
+function Personas({ slug, onOpenPerson }: { slug: string; onOpenPerson: (p: UiPersona) => void }) {
+  const [data, setData] = useState<UiPersona[]>([])
+  useEffect(() => {
+    api(`/api/v1/tenant/${slug}/services/people`).then(r => r.ok ? r.json() : []).then((ppl: ApiServicePerson[]) => {
+      const mapped: UiPersona[] = (ppl || []).map((p, i) => ({
+        id: p.id,
+        name: p.full_name || p.email,
+        email: p.email,
+        role: p.service_role === 'administrator' ? 'admin' : (p.service_role === 'editor' || p.service_role === 'coordinator') ? 'leader' : 'member',
+        active: p.is_active !== false,
+        joined: '—',
+        team: ROLE_LABEL[p.service_role === 'administrator' ? 'admin' : (p.service_role === 'editor' || p.service_role === 'coordinator') ? 'leader' : 'member'],
+        phone: '—',
+        c: (i % 7) + 1,
+        lastSeen: p.welcomed_at ? 'Activo' : 'Pendiente',
+      }))
+      setData(mapped)
+    })
+  }, [slug])
+
+  const [search, setSearch] = useState('')
+  const [fRole, setFRole] = useState('')
+  const [fActive, setFActive] = useState('')
+  const [fTeam, setFTeam] = useState('')
+  const [view, setView] = useState<'list' | 'grid'>('list')
+
+  const teams = useMemo(() => Array.from(new Set(data.map(p => p.team))), [data])
+
+  const filtered = data.filter(p => {
+    if (fRole && p.role !== fRole) return false
+    if (fTeam && p.team !== fTeam) return false
+    if (fActive === 'active' && !p.active) return false
+    if (fActive === 'inactive' && p.active) return false
+    if (search) {
+      const s = search.toLowerCase()
+      if (!p.name.toLowerCase().includes(s) && !p.email.toLowerCase().includes(s)) return false
+    }
+    return true
+  })
+
+  const totalAdmins  = data.filter(p => p.role === 'admin').length
+  const totalLeaders = data.filter(p => p.role === 'leader').length
+  const totalActive  = data.filter(p => p.active).length
+
+  return (
+    <div className="content route-enter">
+      <div className="page-head rise">
+        <div>
+          <span className="eyebrow">Directorio</span>
+          <h1 className="page-title">Las <em>personas</em> que hacen iglesia.</h1>
+          <p className="page-sub">
+            <b style={{ color: 'var(--text)' }}>{data.length} miembros</b> en {teams.length} equipos.
+            Gestiona roles, accesos y disponibilidad desde un único lugar.
+          </p>
+        </div>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn btn-secondary"><I.Send size={14}/> Invitar</button>
+          <button className="btn btn-primary"><I.Plus size={14}/> Añadir persona</button>
+        </div>
+      </div>
+
+      <div className="kpi-row rise rise-d1" style={{ marginBottom: 'var(--gap)' }}>
+        <article className="kpi lift">
+          <div className="kpi-label"><I.People/> Total miembros</div>
+          <div className="kpi-num">{data.length}</div>
+          <div className="kpi-delta up">↑ activos en Servicios</div>
+        </article>
+        <article className="kpi lift">
+          <div className="kpi-label"><I.Bolt/> Administradores</div>
+          <div className="kpi-num">{totalAdmins}</div>
+          <div className="kpi-delta">acceso total</div>
+        </article>
+        <article className="kpi lift">
+          <div className="kpi-label"><I.Check/> Líderes activos</div>
+          <div className="kpi-num">{totalLeaders}</div>
+          <div className="kpi-delta">en {teams.length} equipos</div>
+        </article>
+        <article className="kpi lift">
+          <div className="kpi-label"><I.Sparkles/> Activos / Total</div>
+          <div className="kpi-num">{totalActive}<em>/{data.length}</em></div>
+          <div className="kpi-delta up">{data.length ? Math.round(totalActive/data.length*100) : 0}% activos</div>
+        </article>
+      </div>
+
+      <section className="card rise rise-d2">
+        <div className="card-head" style={{ flexWrap: 'wrap', gap: 12 }}>
+          <div>
+            <div className="card-title">Todos los miembros</div>
+            <div className="card-sub">{filtered.length} resultado{filtered.length !== 1 ? 's' : ''}{filtered.length !== data.length ? ` de ${data.length}` : ''}</div>
+          </div>
+          <div className="row" style={{ gap: 8, marginLeft: 'auto', flexWrap: 'wrap' }}>
+            <div style={{ position: 'relative' }}>
+              <I.Search size={13}/>
+              <input className="input" placeholder="Buscar por nombre o email…"
+                value={search} onChange={e => setSearch(e.target.value)}
+                style={{ paddingLeft: 30, width: 240, height: 32, fontSize: 13 }}/>
+            </div>
+            <FilterSelect value={fTeam}   onChange={setFTeam}   options={[{v:'',l:'Todos los equipos'}, ...teams.map(t => ({v:t,l:t}))]}/>
+            <FilterSelect value={fRole}   onChange={setFRole}   options={[{v:'',l:'Todos los roles'},{v:'admin',l:'Admin'},{v:'leader',l:'Líder'},{v:'member',l:'Miembro'}]}/>
+            <FilterSelect value={fActive} onChange={setFActive} options={[{v:'',l:'Cualquier estado'},{v:'active',l:'Activos'},{v:'inactive',l:'Inactivos'}]}/>
+            <div className="seg">
+              <button className={'seg-btn' + (view==='list'?' is-active':'')} onClick={() => setView('list')} title="Lista"><I.List size={12}/></button>
+              <button className={'seg-btn' + (view==='grid'?' is-active':'')} onClick={() => setView('grid')} title="Tarjetas"><I.Grid size={12}/></button>
+            </div>
+            {(search || fRole || fTeam || fActive) && (
+              <button className="btn btn-ghost btn-sm" onClick={() => { setSearch(''); setFRole(''); setFTeam(''); setFActive('') }}>
+                Limpiar
+              </button>
+            )}
+          </div>
+        </div>
+
+        {view === 'list' ? (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th style={{ width: 50 }}></th>
+                  <th>Nombre / Email</th>
+                  <th>Equipo</th>
+                  <th>Rol</th>
+                  <th>Estado</th>
+                  <th>Última actividad</th>
+                  <th style={{ width: 60 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.length === 0 ? (
+                  <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>
+                    <I.Search size={20}/>
+                    Ningún miembro coincide con los filtros.
+                  </td></tr>
+                ) : filtered.map(p => (
+                  <tr key={p.id} style={{ cursor: 'pointer' }} onClick={() => onOpenPerson(p)}>
+                    <td><div className="av" data-c={p.c}>{PersonaInitials(p.name)}</div></td>
+                    <td>
+                      <div style={{ fontWeight: 600, fontSize: 13.5 }}>{p.name}</div>
+                      <div className="mono" style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>{p.email}</div>
+                    </td>
+                    <td style={{ fontSize: 13, color: 'var(--text-2)' }}>{p.team}</td>
+                    <td>
+                      <span className={'chip ' + (p.role === 'admin' ? 't-accent' : p.role === 'leader' ? 't-info' : 't-mono')}>
+                        {ROLE_LABEL[p.role]}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={'chip ' + (p.active ? 't-success' : '')}>
+                        <span className="chip-dot" style={{ background: p.active ? 'currentColor' : 'var(--text-4)' }}/>
+                        {p.active ? 'Activo' : 'Inactivo'}
+                      </span>
+                    </td>
+                    <td className="mono" style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{p.lastSeen}</td>
+                    <td onClick={e => e.stopPropagation()}><button className="icon-btn"><I.Dots size={14}/></button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div style={{ padding: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
+            {filtered.map(p => (
+              <button key={p.id} onClick={() => onOpenPerson(p)} className="lift"
+                style={{
+                  background: 'var(--surface-2)', border: '1px solid var(--separator)',
+                  borderRadius: 14, padding: 16, textAlign: 'left',
+                  display: 'flex', flexDirection: 'column', gap: 10,
+                }}>
+                <div className="row-between">
+                  <div className="av av-lg" data-c={p.c}>{PersonaInitials(p.name)}</div>
+                  <span className={'chip ' + (p.active ? 't-success' : '')} style={{ height: 20, fontSize: 10 }}>
+                    {p.active ? 'Activo' : 'Inactivo'}
+                  </span>
+                </div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>{p.name}</div>
+                  <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 2 }}>{p.email}</div>
+                </div>
+                <div className="row" style={{ gap: 6, marginTop: 'auto' }}>
+                  <span className={'chip ' + (p.role === 'admin' ? 't-accent' : p.role === 'leader' ? 't-info' : 't-mono')} style={{ height: 20, fontSize: 10.5 }}>
+                    {ROLE_LABEL[p.role]}
+                  </span>
+                  <span className="chip" style={{ height: 20, fontSize: 10.5 }}>{p.team}</span>
+                </div>
+              </button>
+            ))}
           </div>
         )}
-        {err && <p style={s.errorText}>{err}</p>}
-        <div style={s.modalActions}>
-          <button type="button" style={s.btnGhost} onClick={onClose}>Cancelar</button>
-          <button type="button" disabled={busy} style={s.btnPrimary} onClick={submit}>{busy ? '…' : `Añadir${picked.size ? ' ' + picked.size : ''}`}</button>
-        </div>
-      </div>
+      </section>
     </div>
   )
 }
 
-function RecipientAdder({ slug, excludedIds, onPick }: {
-  slug: string; excludedIds: Set<string>; onPick: (p: TeamPerson) => void
-}) {
-  const [search, setSearch] = useState('')
-  const [members, setMembers] = useState<OrgMemberLite[]>([])
-  useEffect(() => {
-    api(`/api/v1/tenant/${slug}/members`).then(r => r.ok ? r.json() : []).then(setMembers)
-  }, [slug])
-  const candidates = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    return members
-      .filter(m => !excludedIds.has(m.id) && (!q || (m.full_name || '').toLowerCase().includes(q) || m.email.toLowerCase().includes(q)))
-      .sort((a, b) => (a.full_name || a.email).toLowerCase().localeCompare((b.full_name || b.email).toLowerCase(), 'es'))
-      .slice(0, 20)
-  }, [members, excludedIds, search])
+function FilterSelect({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { v: string; l: string }[] }) {
   return (
-    <div style={{ marginTop: 8 }}>
-      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar persona…"
-        style={{ ...s.input, fontSize: 13 }} />
-      <div style={{ maxHeight: 180, overflowY: 'auto', marginTop: 6, border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface }}>
-        {candidates.length === 0
-          ? <div style={{ padding: 10, fontSize: 12, color: C.muted, textAlign: 'center' }}>No hay coincidencias</div>
-          : candidates.map(m => (
-            <div key={m.id}
-              onClick={() => onPick({ member_id: m.id, full_name: m.full_name, email: m.email, avatar: m.avatar || null, preferences: { max_per_month: null, max_per_day: null } })}
-              style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 13, display: 'flex', flexDirection: 'column' }}
-              onMouseEnter={e => (e.currentTarget.style.background = C.soft)}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-              <span style={{ color: C.text, fontWeight: 500 }}>{m.full_name || '—'}</span>
-              <span style={{ fontSize: 11, color: C.muted }}>{m.email}</span>
-            </div>
-          ))}
-      </div>
-    </div>
-  )
-}
-
-function TeamBulkEmailModal({ slug, recipients, teamId, onClose, onSent }: {
-  slug: string; recipients: TeamPerson[]; teamId?: string
-  onClose: () => void; onSent: () => void
-}) {
-  useEscape(onClose)
-  const [templates, setTemplates] = useState<EmailTemplate[]>([])
-  const [tplId, setTplId] = useState<string>('')
-  const [subject, setSubject] = useState('')
-  const [body, setBody] = useState('')
-  const [list, setList] = useState<TeamPerson[]>(recipients)
-  const [preview, setPreview] = useState<{ subject: string; body: string } | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
-  const [bodyKey, setBodyKey] = useState(0)
-  const bodyRef = React.useRef<RichTextEditorHandle>(null)
-  const subjectRef = React.useRef<HTMLInputElement>(null)
-  const [addOpen, setAddOpen] = useState(false)
-  const [tplsManagerOpen, setTplsManagerOpen] = useState(false)
-
-  const reloadTpls = useCallback(() => {
-    api(`/api/v1/tenant/${slug}/email/templates`).then(r => r.ok ? r.json() : []).then(setTemplates)
-  }, [slug])
-  useEffect(() => { reloadTpls() }, [reloadTpls])
-
-  function applyTemplate(id: string) {
-    setTplId(id)
-    const t = templates.find(x => x.id === id)
-    if (t) { setSubject(t.subject); setBody(t.body); setBodyKey(k => k + 1) }
-  }
-  function insertIntoBody(tok: string) { bodyRef.current?.insert(tok) }
-  function insertIntoSubject(tok: string) {
-    const el = subjectRef.current
-    if (!el) { setSubject(s => s + tok); return }
-    const start = el.selectionStart ?? subject.length, end = el.selectionEnd ?? subject.length
-    setSubject(subject.slice(0, start) + tok + subject.slice(end))
-    setTimeout(() => { el.focus(); el.setSelectionRange(start + tok.length, start + tok.length) }, 0)
-  }
-
-  async function doPreview() {
-    setErr('')
-    if (list.length === 0) { setErr('Sin destinatarios'); return }
-    const r = await api(`/api/v1/tenant/${slug}/email/messages/preview`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipient_member_id: list[0].member_id, subject, body, team_id: teamId || null }),
-    })
-    if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); return }
-    setPreview(await r.json())
-  }
-
-  async function send() {
-    if (list.length === 0) { setErr('Sin destinatarios'); return }
-    setErr(''); setBusy(true)
-    const r = await api(`/api/v1/tenant/${slug}/email/messages`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        recipient_member_ids: list.map(x => x.member_id),
-        template_id: tplId || null, subject, body,
-        team_id: teamId || null,
-      }),
-    })
-    if (!r.ok) { const j = await r.json().catch(() => ({})); setErr(j.detail || 'Error'); setBusy(false); return }
-    await r.json()
-    onSent()
-  }
-
-  return (
-    <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div data-tp="wizard-modal" style={{ ...s.modal, width: 680, padding: 0, gap: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 28px 14px', borderBottom: `1px solid ${C.border}` }}>
-          <h3 style={s.modalTitle}>Enviar correo · {list.length} destinatario{list.length === 1 ? '' : 's'}</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: C.muted, lineHeight: 1 }}>✕</button>
-        </div>
-
-        <div style={{ flex: 1, overflowY: 'auto', padding: '14px 28px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            <select style={{ ...s.select, flex: 1 }} value={tplId} onChange={e => applyTemplate(e.target.value)}>
-              <option value="">— Sin plantilla —</option>
-              {templates.map(t => <option key={t.id} value={t.id}>{KIND_LABEL[t.kind]} · {t.name}</option>)}
-            </select>
-            <button type="button" onClick={() => setTplsManagerOpen(true)}
-              title="Gestionar plantillas"
-              style={{ ...s.btnGhost, padding: '6px 10px', fontSize: 12, gap: 4 }}>
-              <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-              </svg>
-              Plantillas
-            </button>
-          </div>
-
-          <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: '8px 12px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-              <strong style={{ fontSize: 12, color: C.muted }}>PARA ({list.length})</strong>
-              <button type="button" onClick={() => setAddOpen(o => !o)} style={{ background: 'none', border: 'none', color: C.primary, fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>
-                {addOpen ? 'Cerrar' : '+ Añadir destinatario'}
-              </button>
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {list.length === 0
-                ? <span style={{ fontSize: 12, color: C.muted, fontStyle: 'italic' }}>Sin destinatarios — añade al menos uno.</span>
-                : list.map(p => (
-                  <span key={p.member_id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 999, padding: '3px 10px', fontSize: 12 }}>
-                    {p.full_name || p.email}
-                    <button type="button" onClick={() => setList(prev => prev.filter(x => x.member_id !== p.member_id))}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, padding: 0, fontSize: 14, lineHeight: 1 }}>×</button>
-                  </span>
-                ))}
-            </div>
-            {addOpen && (
-              <RecipientAdder slug={slug} excludedIds={new Set(list.map(x => x.member_id))}
-                onPick={p => setList(prev => [...prev, p])} />
-            )}
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>Asunto</label>
-              <VariablePicker onInsert={insertIntoSubject} anchorRight />
-            </div>
-            <input ref={subjectRef} style={s.input} value={subject} onChange={e => setSubject(e.target.value)}
-              placeholder="Asunto del correo" />
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <label style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>Cuerpo</label>
-            <RichTextEditor key={bodyKey} ref={bodyRef} value={body} onChange={setBody}
-              placeholder="Hola {{ to.first_name }}, …"
-              minHeight={220}
-              extraToolbar={<VariablePicker onInsert={insertIntoBody} anchorRight />} />
-          </div>
-
-          {preview && (
-            <div style={{ border: `1.5px solid ${C.primary}`, borderRadius: 10, padding: '14px 16px', background: '#fff' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingBottom: 8, borderBottom: `1px solid ${C.soft}` }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.primary, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Vista previa (1ª destinatario)</div>
-                <button onClick={() => setPreview(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 12 }}>✕ Cerrar</button>
-              </div>
-              <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>
-                <strong style={{ color: C.text }}>Para:</strong> {list[0]?.full_name || list[0]?.email}
-              </div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 12 }}>{preview.subject || <em style={{ color: C.muted, fontWeight: 400 }}>(sin asunto)</em>}</div>
-              {preview.body
-                ? <div className="worsyn-rich-render" style={{ fontSize: 14, color: C.text, lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: preview.body }} />
-                : <em style={{ color: C.muted, fontSize: 13 }}>(sin cuerpo)</em>}
-            </div>
-          )}
-
-          {err && <p style={s.errorText}>{err}</p>}
-        </div>
-
-        <div style={{ ...s.modalActions, padding: '14px 28px 18px', borderTop: `1px solid ${C.border}`, marginTop: 0 }}>
-          <button style={s.btnGhost} onClick={onClose}>Cancelar</button>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button style={s.btnGhost} onClick={doPreview}>Vista previa</button>
-            <button style={s.btnPrimary} onClick={send} disabled={busy || list.length === 0}>{busy ? '…' : `Enviar ${list.length}`}</button>
-          </div>
-        </div>
-      </div>
-
-      {tplsManagerOpen && (
-        <TemplatesManagerModal slug={slug}
-          onClose={() => { setTplsManagerOpen(false); reloadTpls() }} />
-      )}
-    </div>
-  )
-}
-
-function teamToSettingsForm(t: Team) {
-  return {
-    is_rehearsal: !!t.is_rehearsal,
-    is_secure: !!t.is_secure,
-    is_split: !!t.is_split,
-    service_type_ids: [...(t.service_type_ids ?? [])],
-    related_team_ids: [...(t.related_team_ids ?? [])],
-    default_status: t.default_status === 'confirmed' ? 'confirmed' : 'unconfirmed',
-    notify_on_prepare: t.notify_on_prepare !== false,
-    replies_to: t.replies_to ?? 'all_leaders',
-    gap_alerts_enabled: !!t.gap_alerts_enabled,
-    last_scheduled_date_rule: t.last_scheduled_date_rule ?? 'same_as_service_type',
-    scheduled_viewer_access: t.scheduled_viewer_access ?? 'full_plan',
-    signup_sheets_auto_enable: !!t.signup_sheets_auto_enable,
-    reschedule_on_decline: t.reschedule_on_decline ?? 'manual',
-  }
-}
-
-// ── Icon set (Lucide-style, stroke 2, currentColor) ──────────────────────────
-const Ico = {
-  settings: (
-    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
-  ),
-  calendar: (
-    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" />
-    </svg>
-  ),
-  alert: (
-    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" />
-    </svg>
-  ),
-  sliders: (
-    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />
-    </svg>
-  ),
-  layers: (
-    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="m12 2 10 6.5L12 15 2 8.5z" /><path d="m2 17.5 10 6.5 10-6.5" /><path d="m2 13 10 6.5L22 13" />
-    </svg>
-  ),
-  users: (
-    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
-    </svg>
-  ),
-  recycle: (
-    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" />
-    </svg>
-  ),
-  trash: (
-    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-    </svg>
-  ),
-  check: (
-    <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M20 6 9 17l-5-5" />
-    </svg>
-  ),
-  music: (
-    <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
-    </svg>
-  ),
-  shield: (
-    <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-    </svg>
-  ),
-  split: (
-    <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M16 3h5v5M8 3H3v5M8 21H3v-5M16 21h5v-5" /><path d="M3 8l7 8 4-4 7 4" />
-    </svg>
-  ),
-  plus: (
-    <svg viewBox="0 0 24 24" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 5v14M5 12h14" />
-    </svg>
-  ),
-}
-
-function TeamSettingsTab({ slug, team, allTeams, types, onTeamChanged, onTeamDeleted }: {
-  slug: string
-  team: Team
-  allTeams: Team[]
-  types: ServiceType[]
-  onTeamChanged: (t: Team) => void
-  onTeamDeleted: (id: string) => void
-}) {
-  const [form, setForm] = useState(() => teamToSettingsForm(team))
-  const [saving, setSaving] = useState(false)
-  const [saveError, setSaveError] = useState('')
-  const [stypeDropOpen, setStypeDropOpen] = useState(false)
-
-  useEffect(() => {
-    setForm(teamToSettingsForm(team))
-    setSaveError('')
-  }, [team.id])
-
-  const isDirty = useMemo(() => {
-    const a = { ...teamToSettingsForm(team), service_type_ids: [...(team.service_type_ids ?? [])].sort() }
-    const b = { ...form, service_type_ids: [...form.service_type_ids].sort() }
-    return JSON.stringify(a) !== JSON.stringify(b)
-  }, [form, team])
-
-  function upd<K extends keyof ReturnType<typeof teamToSettingsForm>>(key: K, val: ReturnType<typeof teamToSettingsForm>[K]) {
-    setForm(f => ({ ...f, [key]: val }))
-  }
-
-  async function save() {
-    if (form.service_type_ids.length === 0) {
-      setSaveError('Selecciona al menos un tipo de servicio.')
-      return
-    }
-    setSaving(true)
-    setSaveError('')
-    try {
-      const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      })
-      if (!r.ok) {
-        const j = await r.json().catch(() => ({} as any))
-        setSaveError(j.detail || 'Error al guardar. Intenta de nuevo.')
-        return
-      }
-      onTeamChanged(await r.json() as Team)
-    } finally { setSaving(false) }
-  }
-
-  const [relDropOpen, setRelDropOpen] = useState(false)
-
-  const card: React.CSSProperties = {
-    background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
-    padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 0,
-    boxShadow: '0 1px 2px rgb(15 23 42 / 0.04)',
-    transition: 'box-shadow 0.18s ease, border-color 0.18s ease',
-  }
-  const cTitle: React.CSSProperties = {
-    fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: '0.08em',
-    textTransform: 'uppercase', paddingBottom: 12, marginBottom: 4,
-    borderBottom: `1px solid ${C.border}`,
-    display: 'flex', alignItems: 'center', gap: 8,
-  }
-  const row: React.CSSProperties = {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    gap: 12, padding: '11px 0', borderBottom: `1px solid ${C.border}`,
-  }
-  const lastRow: React.CSSProperties = { ...row, borderBottom: 'none', paddingBottom: 2 }
-  const lbl: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: C.text }
-  const hnt: React.CSSProperties = { fontSize: 11, color: C.muted, marginTop: 2, lineHeight: 1.45 }
-  const sel = (value: string, onChange: (v: string) => void, opts: { v: string; label: string }[]) => (
     <select value={value} onChange={e => onChange(e.target.value)}
-      style={{ ...s.select, fontSize: 12, minWidth: 0, transition: 'border-color 0.15s ease, box-shadow 0.15s ease' }}>
-      {opts.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+      style={{
+        height: 32, padding: '0 8px', borderRadius: 8,
+        background: 'var(--surface-3)', color: 'var(--text-2)',
+        border: '1px solid var(--separator)', fontSize: 12.5,
+        cursor: 'pointer', appearance: 'none', paddingRight: 24,
+        backgroundImage: 'url("data:image/svg+xml;utf8,<svg xmlns=%27http://www.w3.org/2000/svg%27 width=%2710%27 height=%2710%27 viewBox=%270 0 24 24%27 fill=%27none%27 stroke=%27currentColor%27 stroke-width=%272%27><polyline points=%276 9 12 15 18 9%27/></svg>")',
+        backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center',
+      }}>
+      {options.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
     </select>
   )
-  const toggle = (checked: boolean, onChange: (v: boolean) => void) => (
-    <button type="button" onClick={() => onChange(!checked)}
-      aria-pressed={checked}
-      style={{
-        width: 36, height: 20, borderRadius: 999,
-        background: checked ? C.primary : C.border,
-        border: 'none', cursor: 'pointer', position: 'relative',
-        transition: 'background 0.2s ease', padding: 0, flexShrink: 0,
-      }}>
-      <span style={{
-        position: 'absolute', top: 2, left: checked ? 18 : 2,
-        width: 16, height: 16, borderRadius: '50%', background: '#fff',
-        boxShadow: '0 1px 3px rgba(0,0,0,.18)',
-        transition: 'left 0.18s ease',
-      }} />
-    </button>
-  )
-
-  // FlagCard — selector tipo-card (icono + título + descripción) con ✓
-  const flagCard = (active: boolean, onToggle: () => void, icon: React.ReactNode, title: string, desc: string) => (
-    <div onClick={onToggle}
-      style={{
-        border: `1px solid ${active ? C.primary : C.border}`,
-        background: active ? 'rgba(79,70,229,0.05)' : C.surface,
-        borderRadius: 10, padding: 12, cursor: 'pointer',
-        display: 'flex', gap: 10, alignItems: 'flex-start',
-        transition: 'background 0.15s ease, border-color 0.15s ease, transform 0.1s ease',
-      }}>
-      <div style={{
-        width: 18, height: 18, borderRadius: 4,
-        border: `1px solid ${active ? C.primary : C.border}`,
-        background: active ? C.primary : 'transparent',
-        flexShrink: 0, marginTop: 2,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: 'white', transition: 'background 0.15s ease, border-color 0.15s ease',
-      }}>{active && Ico.check}</div>
-      <div style={{ flex: 1 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-          <span style={{ display: 'flex', color: active ? C.primary : C.muted }}>{icon}</span>
-          <span style={{ fontWeight: 600, fontSize: 13, color: C.text }}>{title}</span>
-        </div>
-        <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.45 }}>{desc}</div>
-      </div>
-    </div>
-  )
-
-  const availableTypes = types.filter(st => !form.service_type_ids.includes(st.id))
-  const availableRelated = allTeams.filter(t => t.id !== team.id && !form.related_team_ids.includes(t.id))
-  const selectedRelated = allTeams.filter(t => form.related_team_ids.includes(t.id))
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-
-        {/* Card 1 — Tipo de equipo (flagCards) */}
-        <div style={card}>
-          <div style={cTitle}><span style={{ color: C.primary, display: 'flex' }}>{Ico.settings}</span>Tipo de equipo</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-            {flagCard(form.is_rehearsal, () => upd('is_rehearsal', !form.is_rehearsal), Ico.music,
-              'Equipo de ensayo', 'Acceso a canciones, partituras y archivos de media del servicio.')}
-            {flagCard(form.is_secure, () => upd('is_secure', !form.is_secure), Ico.shield,
-              'Equipo seguro', 'Sólo personas con verificación de antecedentes podrán ser asignadas.')}
-            {flagCard(form.is_split, () => upd('is_split', !form.is_split), Ico.split,
-              'Equipo dividido', 'Permite distintas personas por franja cuando hay varios servicios el mismo día.')}
-          </div>
-        </div>
-
-        {/* Card 2 — Valores predeterminados de programación */}
-        <div style={card}>
-          <div style={cTitle}><span style={{ color: C.primary, display: 'flex' }}>{Ico.calendar}</span>Valores predeterminados de programación</div>
-          <div style={row}>
-            <div><div style={lbl}>Estado predeterminado</div><div style={hnt}>Al crear un nuevo plan</div></div>
-            {sel(form.default_status, v => upd('default_status', v), [
-              { v: 'unconfirmed', label: 'No confirmado' },
-              { v: 'confirmed', label: 'Confirmado' },
-            ])}
-          </div>
-          <div style={row}>
-            <div><div style={lbl}>Notificar al preparar plan</div><div style={hnt}>Enviar alerta cuando el plan esté listo</div></div>
-            {toggle(form.notify_on_prepare, v => upd('notify_on_prepare', v))}
-          </div>
-          <div style={lastRow}>
-            <div><div style={lbl}>Respuestas van a</div><div style={hnt}>Destinatarios de las respuestas</div></div>
-            {sel(form.replies_to, v => upd('replies_to', v), [
-              { v: 'all_leaders', label: 'Todos los líderes' },
-              { v: 'service_type_leaders', label: 'Líderes del tipo' },
-              { v: 'no_one', label: 'Nadie' },
-            ])}
-          </div>
-        </div>
-
-        {/* Card 3 — Alertas de huecos */}
-        <div style={card}>
-          <div style={cTitle}><span style={{ color: C.warning, display: 'flex' }}>{Ico.alert}</span>Alertas de huecos en programación</div>
-          <div style={lastRow}>
-            <div><div style={lbl}>Activar alertas de huecos</div><div style={hnt}>Avisar al líder y a la persona cuando no se confirme antes de la fecha límite</div></div>
-            {toggle(form.gap_alerts_enabled, v => upd('gap_alerts_enabled', v))}
-          </div>
-        </div>
-
-        {/* Card 4 — Opciones */}
-        <div style={card}>
-          <div style={cTitle}><span style={{ color: C.primary, display: 'flex' }}>{Ico.sliders}</span>Opciones</div>
-          <div style={row}>
-            <div><div style={lbl}>Última fecha programada</div><div style={hnt}>Cómo se registra la fecha de servicio</div></div>
-            {sel(form.last_scheduled_date_rule, v => upd('last_scheduled_date_rule', v), [
-              { v: 'same_as_service_type', label: '= Tipo de servicio' },
-              { v: 'last_used_anywhere', label: 'Cualquier sitio' },
-              { v: 'last_used_in_team', label: 'En este equipo' },
-              { v: 'last_used_in_position', label: 'En esta posición' },
-            ])}
-          </div>
-          <div style={row}>
-            <div><div style={lbl}>Acceso de espectadores</div><div style={hnt}>Qué ve un miembro como espectador</div></div>
-            {sel(form.scheduled_viewer_access, v => upd('scheduled_viewer_access', v), [
-              { v: 'full_plan', label: 'Plan completo' },
-              { v: 'limited', label: 'Limitado' },
-              { v: 'none', label: 'Sin acceso' },
-            ])}
-          </div>
-          <div style={lastRow}>
-            <div><div style={lbl}>Hojas de inscripción auto.</div><div style={hnt}>Activar para nuevos planes</div></div>
-            {toggle(form.signup_sheets_auto_enable, v => upd('signup_sheets_auto_enable', v))}
-          </div>
-        </div>
-
-        {/* Card 5 — Tipos de servicio */}
-        <div style={card}>
-          <div style={cTitle}><span style={{ color: C.primary, display: 'flex' }}>{Ico.layers}</span>Tipos de servicio</div>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 8, marginBottom: 8, lineHeight: 1.45 }}>
-            En qué tipos de servicio participa este equipo. <strong style={{ color: C.text }}>Mínimo 1 requerido.</strong>
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {form.service_type_ids.length === 0
-              ? <span style={{ fontSize: 12, color: C.danger, fontStyle: 'italic' }}>⚠ Selecciona al menos uno</span>
-              : types.filter(st => form.service_type_ids.includes(st.id)).map(st => {
-                const isLast = form.service_type_ids.length === 1
-                return (
-                  <span key={st.id} style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 4,
-                    background: C.primaryLight, border: `1px solid ${C.primary}40`,
-                    borderRadius: 999, padding: '4px 4px 4px 10px', fontSize: 12, color: C.primary, fontWeight: 500,
-                  }}>
-                    <span style={{ width: 7, height: 7, borderRadius: 2, background: st.color || C.primary }} />
-                    {st.name}
-                    <button disabled={isLast}
-                      title={isLast ? 'Mínimo 1 tipo de servicio requerido' : 'Quitar'}
-                      onClick={() => upd('service_type_ids', form.service_type_ids.filter(x => x !== st.id))}
-                      style={{
-                        background: isLast ? 'transparent' : 'rgba(79,70,229,0.15)', border: 'none',
-                        cursor: isLast ? 'not-allowed' : 'pointer',
-                        color: isLast ? `${C.primary}55` : C.primary, width: 16, height: 16, borderRadius: '50%',
-                        fontSize: 13, lineHeight: 1, padding: 0, display: 'flex',
-                        alignItems: 'center', justifyContent: 'center',
-                        transition: 'background 0.15s',
-                      }}>×</button>
-                  </span>
-                )
-              })
-            }
-          </div>
-          {availableTypes.length > 0 && (
-            <div style={{ position: 'relative', marginTop: 12 }}>
-              <button onClick={() => setStypeDropOpen(o => !o)}
-                style={{ ...s.btnGhost, padding: '5px 12px', fontSize: 12, gap: 4, transition: 'background 0.15s, border-color 0.15s' }}>
-                {Ico.plus} Añadir tipo
-              </button>
-              {stypeDropOpen && (
-                <div style={{
-                  position: 'absolute', top: '100%', left: 0, marginTop: 4,
-                  background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
-                  boxShadow: '0 4px 16px rgba(0,0,0,.12)', zIndex: 50, minWidth: 200, maxHeight: 240, overflowY: 'auto',
-                }}>
-                  {availableTypes.map(st => (
-                    <button key={st.id} onClick={() => { upd('service_type_ids', [...form.service_type_ids, st.id]); setStypeDropOpen(false) }}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left' as const,
-                        padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer',
-                        fontSize: 13, color: C.text, transition: 'background 0.12s',
-                      }}
-                      onMouseEnter={e => (e.currentTarget.style.background = C.soft)}
-                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                      <span style={{ width: 8, height: 8, borderRadius: 2, background: st.color || C.primary }} />
-                      {st.name}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Card 6 — Equipos relacionados (funcional) */}
-        <div style={card}>
-          <div style={cTitle}><span style={{ color: C.primary, display: 'flex' }}>{Ico.users}</span>Equipos relacionados</div>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 8, marginBottom: 8, lineHeight: 1.45 }}>
-            Cuando los miembros usen el filtro <strong style={{ color: C.text }}>Mis equipos</strong>, también se incluirán estos equipos.
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {selectedRelated.length === 0
-              ? <span style={{ fontSize: 12, color: C.muted, fontStyle: 'italic' }}>Sin equipos relacionados</span>
-              : selectedRelated.map(rt => (
-                <span key={rt.id} style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  background: C.soft, border: `1px solid ${C.border}`,
-                  borderRadius: 999, padding: '4px 4px 4px 10px', fontSize: 12, color: C.text, fontWeight: 500,
-                }}>
-                  <span style={{ width: 7, height: 7, borderRadius: 2, background: rt.color || C.primary }} />
-                  {rt.name}
-                  <button onClick={() => upd('related_team_ids', form.related_team_ids.filter(x => x !== rt.id))}
-                    style={{
-                      background: 'rgba(100,116,139,0.15)', border: 'none', cursor: 'pointer',
-                      color: C.muted, width: 16, height: 16, borderRadius: '50%',
-                      fontSize: 13, lineHeight: 1, padding: 0, display: 'flex',
-                      alignItems: 'center', justifyContent: 'center', transition: 'background 0.15s',
-                    }}>×</button>
-                </span>
-              ))
-            }
-          </div>
-          {availableRelated.length > 0 && (
-            <div style={{ position: 'relative', marginTop: 12 }}>
-              <button onClick={() => setRelDropOpen(o => !o)}
-                style={{ ...s.btnGhost, padding: '5px 12px', fontSize: 12, gap: 4, transition: 'background 0.15s, border-color 0.15s' }}>
-                {Ico.plus} Añadir equipo
-              </button>
-              {relDropOpen && (
-                <div style={{
-                  position: 'absolute', top: '100%', left: 0, marginTop: 4,
-                  background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
-                  boxShadow: '0 4px 16px rgba(0,0,0,.12)', zIndex: 50, minWidth: 220, maxHeight: 240, overflowY: 'auto',
-                }}>
-                  {availableRelated.map(rt => (
-                    <button key={rt.id} onClick={() => { upd('related_team_ids', [...form.related_team_ids, rt.id]); setRelDropOpen(false) }}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left' as const,
-                        padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer',
-                        fontSize: 13, color: C.text, transition: 'background 0.12s',
-                      }}
-                      onMouseEnter={e => (e.currentTarget.style.background = C.soft)}
-                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                      <span style={{ width: 8, height: 8, borderRadius: 2, background: rt.color || C.primary }} />
-                      {rt.name}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Card 7 — Reagendado de rechazos (full width) */}
-        <div style={{ ...card, gridColumn: '1 / -1' }}>
-          <div style={cTitle}><span style={{ color: C.primary, display: 'flex' }}>{Ico.recycle}</span>Reagendado de rechazos</div>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 8, marginBottom: 12, lineHeight: 1.45 }}>
-            Cuando alguien rechaza una solicitud, ¿cómo debería ser reagendado?
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 32px' }}>
-            {([
-              { v: 'none', label: 'No reagendar', hint: 'Los rechazos no generan ninguna acción' },
-              { v: 'manual', label: 'Reagendar manualmente', hint: 'Se crea una posición necesaria para asignar' },
-              { v: 'volunteer', label: 'Reemplazo voluntario', hint: 'La persona programada elige su sustituto' },
-              { v: 'auto', label: 'Auto-agenda', hint: 'El siguiente candidato recibe solicitud automática' },
-              { v: 'signup_sheet', label: 'Hoja de inscripción', hint: 'La posición abre en la hoja del equipo' },
-            ]).map(({ v, label, hint }) => {
-              const active = form.reschedule_on_decline === v
-              return (
-                <label key={v}
-                  onClick={() => upd('reschedule_on_decline', v)}
-                  style={{
-                    display: 'flex', gap: 10, cursor: 'pointer', alignItems: 'flex-start',
-                    padding: 10, borderRadius: 8,
-                    border: `1px solid ${active ? C.primary : C.border}`,
-                    background: active ? 'rgba(79,70,229,0.05)' : C.surface,
-                    transition: 'background 0.15s, border-color 0.15s',
-                  }}>
-                  <div style={{
-                    width: 16, height: 16, borderRadius: '50%', marginTop: 2,
-                    border: `2px solid ${active ? C.primary : C.border}`,
-                    background: 'transparent', flexShrink: 0,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    transition: 'border-color 0.15s',
-                  }}>
-                    {active && <span style={{ width: 7, height: 7, borderRadius: '50%', background: C.primary }} />}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{label}</div>
-                    <div style={{ fontSize: 11, color: C.muted, marginTop: 2, lineHeight: 1.4 }}>{hint}</div>
-                  </div>
-                </label>
-              )
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* Acciones */}
-      <div style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        paddingTop: 14, marginTop: 4, borderTop: `1px solid ${C.border}`,
-      }}>
-        <button onClick={async () => {
-            if (!confirm(`¿Eliminar el equipo "${team.name}"? Esta acción es irreversible.`)) return
-            const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}`, { method: 'DELETE' })
-            if (r.ok) onTeamDeleted(team.id)
-          }}
-          style={{
-            ...s.btnGhost, color: C.danger, borderColor: 'rgba(239,68,68,.3)', gap: 6,
-            transition: 'background 0.15s, border-color 0.15s',
-          }}
-          onMouseEnter={e => (e.currentTarget.style.background = C.dangerLight)}
-          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-          {Ico.trash} Eliminar equipo
-        </button>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {saveError && <span style={{ fontSize: 12, color: C.danger }}>{saveError}</span>}
-          {isDirty && !saving && !saveError && <span style={{ fontSize: 11, color: C.warning, fontWeight: 600 }}>· Cambios sin guardar</span>}
-          {(() => {
-            const noTypes = form.service_type_ids.length === 0
-            const disabled = !isDirty || saving || noTypes
-            return (
-              <button onClick={save} disabled={disabled}
-                title={noTypes ? 'Selecciona al menos un tipo de servicio' : undefined}
-                style={{
-                  ...s.btnPrimary, gap: 6,
-                  opacity: disabled ? 0.5 : 1,
-                  cursor: disabled ? 'not-allowed' : 'pointer',
-                  transition: 'background 0.15s, opacity 0.15s',
-                }}>
-                {saving ? <>Guardando…</> : <>{Ico.check} Guardar cambios</>}
-              </button>
-            )
-          })()}
-        </div>
-      </div>
-    </div>
-  )
 }
 
-function TeamDetailView({ slug, team, allTeams, orgMembers, types, currentMemberId, onBack, onTeamChanged, onTeamDeleted, onPeopleInvalidate, onOpenPerson }: {
-  slug: string
-  team: Team
-  allTeams: Team[]
-  orgMembers: OrgMemberLite[]
-  types: ServiceType[]
-  currentMemberId: string | null
-  onBack: () => void
-  onTeamChanged: (t: Team) => void
-  onTeamDeleted: (id: string) => void
-  onPeopleInvalidate?: () => void
-  onOpenPerson?: (serviceMemberId: string) => void
-}) {
-  const [tab, setTab] = useState<'settings' | 'members' | 'automations'>('members')
-  const [detail, setDetail] = useState<TeamDetailPayload | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [selectedView, setSelectedView] = useState<{ kind: 'all' | 'leaders' | 'position'; positionId?: string }>({ kind: 'all' })
-  const [addPositionOpen, setAddPositionOpen] = useState(false)
-  const [addLeaderOpen, setAddLeaderOpen] = useState(false)
-  const [addMembersFor, setAddMembersFor] = useState<TeamPositionInfo | null>(null)
-  const [emailRecipients, setEmailRecipients] = useState<TeamPerson[] | null>(null)
-  const [editingTeamOpen, setEditingTeamOpen] = useState(false)
-  // Members already in Services (used to badge "Nuevo en Servicios" in the picker)
-  const [serviceMemberIds, setServiceMemberIds] = useState<Set<string>>(new Set())
-  // Queue of compose-modal items waiting after position add.
-  // kind='welcome' = brand-new to Services (magic link). kind='team_welcome' = already in Services, joining a new team.
-  const [welcomeQueue, setWelcomeQueue] = useState<Array<{ p: ServicePerson; kind: 'welcome' | 'team_welcome' }>>([])
-
-  const reload = useCallback(async () => {
-    setLoading(true)
-    try {
-      const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}/detail`)
-      if (r.ok) setDetail(await r.json())
-    } finally { setLoading(false) }
-  }, [slug, team.id])
-
-  const reloadServiceMembers = useCallback(async () => {
-    const r = await api(`/api/v1/tenant/${slug}/services/people`)
-    if (r.ok) {
-      const ppl: { member_id: string }[] = await r.json()
-      setServiceMemberIds(new Set(ppl.map(p => p.member_id)))
-    }
-  }, [slug])
-
-  useEffect(() => { reload(); reloadServiceMembers() }, [reload, reloadServiceMembers])
-
-  const visibleList = useMemo(() => {
-    if (!detail) return { title: 'Cargando…', items: [] as TeamPerson[], canDelete: false as boolean, deletePositionId: undefined as string | undefined }
-    if (selectedView.kind === 'all')
-      return { title: 'Todos los miembros del equipo', items: detail.all_members, canDelete: false, deletePositionId: undefined }
-    if (selectedView.kind === 'leaders')
-      return { title: 'Líderes del equipo', items: detail.leaders, canDelete: false, deletePositionId: undefined }
-    const p = detail.positions.find(x => x.id === selectedView.positionId)
-    if (!p) return { title: 'Posición', items: [], canDelete: true, deletePositionId: selectedView.positionId }
-    return { title: p.name, items: p.members, canDelete: true, deletePositionId: p.id }
-  }, [detail, selectedView])
-
-  const positionForAdding = useMemo(
-    () => detail && selectedView.kind === 'position' ? detail.positions.find(x => x.id === selectedView.positionId) || null : null,
-    [detail, selectedView]
-  )
-
-  async function deletePosition(posId: string) {
-    if (!confirm('¿Eliminar esta posición? Se quitarán todos los miembros asignados a ella.')) return
-    const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}/positions/${posId}`, { method: 'DELETE' })
-    if (r.ok) {
-      setSelectedView({ kind: 'all' })
-      reload()
-    }
-  }
-
-  async function removeMemberFromPosition(posId: string, memberId: string) {
-    if (!confirm('¿Quitar esta persona de la posición?')) return
-    const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}/positions/${posId}/members/${memberId}`, { method: 'DELETE' })
-    if (r.ok) reload()
-  }
-
-  async function removeLeader(memberId: string) {
-    if (!confirm('¿Quitar este líder del equipo?')) return
-    const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}/leaders/${memberId}`, { method: 'DELETE' })
-    if (r.ok) {
-      const t = await r.json() as Team
-      onTeamChanged(t)
-      reload()
-    } else {
-      const j = await r.json().catch(() => ({} as any))
-      alert(j.detail || 'No se pudo quitar')
-    }
-  }
-
-  // Find ServiceMember id from a member_id and bubble up to PersonasView
-  async function openPerson(memberId: string) {
-    if (!onOpenPerson) return
-    const r = await api(`/api/v1/tenant/${slug}/services/people`)
-    if (!r.ok) return
-    const list: { id: string; member_id: string }[] = await r.json()
-    const sp = list.find(x => x.member_id === memberId)
-    if (sp) onOpenPerson(sp.id)
-  }
-
+function PersonaDetail({ persona, onBack }: { persona: UiPersona; onBack: () => void }) {
   return (
-    <main style={s.main}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
+    <div className="content route-enter">
+      <div className="page-head rise">
         <div>
-          <button onClick={onBack} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', padding: '0 0 6px' }}>‹ EQUIPOS</button>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 12, height: 12, borderRadius: 3, background: team.color || C.primary, flexShrink: 0 }} />
-            <h2 style={s.mainTitle}>{team.name}</h2>
-          </div>
-          <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-            {team.is_rehearsal && <span style={{ ...s.pill, background: '#DBEAFE', color: '#1D4ED8', fontSize: 10 }}>Ensayo</span>}
-            {team.is_secure && <span style={{ ...s.pill, background: '#FEF3C7', color: '#92400E', fontSize: 10 }}>Seguro</span>}
-            {team.is_split && <span style={{ ...s.pill, background: '#F3E8FF', color: '#6B21A8', fontSize: 10 }}>Dividido</span>}
-            {types.filter(t => team.service_type_ids?.includes(t.id)).map(st => (
-              <span key={st.id} style={{ ...s.pill, background: C.soft, color: C.text, fontSize: 10 }}>{st.name}</span>
-            ))}
-          </div>
-        </div>
-        <button style={{ ...s.btnGhost, marginTop: 4 }} onClick={() => setEditingTeamOpen(true)}>Editar nombre</button>
-      </div>
-
-      <div style={{ display: 'flex', gap: 0, borderBottom: `1px solid ${C.border}`, marginBottom: 18 }}>
-        {(['members', 'settings', 'automations'] as const).map(k => {
-          const active = k === tab
-          const label = k === 'settings' ? 'Configuración' : k === 'members' ? 'Miembros' : 'Automatizaciones'
-          return (
-            <button key={k} onClick={() => setTab(k)}
-              style={{
-                background: 'none', border: 'none', cursor: 'pointer',
-                padding: '10px 16px', fontSize: 13, fontWeight: 600,
-                color: active ? C.text : C.muted,
-                borderBottom: `2px solid ${active ? C.primary : 'transparent'}`,
-                marginBottom: -1,
-              }}>{label}</button>
-          )
-        })}
-      </div>
-
-      {tab === 'settings' && (
-        <TeamSettingsTab slug={slug} team={team} allTeams={allTeams} types={types} onTeamChanged={onTeamChanged} onTeamDeleted={onTeamDeleted} />
-      )}
-
-      {tab === 'automations' && (
-        <div style={{ background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10, padding: '40px 16px', textAlign: 'center', color: C.muted, fontSize: 13 }}>
-          Próximamente — automatizaciones del equipo (recordatorios, asignaciones automáticas, etc.).
-        </div>
-      )}
-
-      {tab === 'members' && (
-        <div style={{ display: 'flex', gap: 18, alignItems: 'flex-start' }}>
-          <div style={{ width: 240, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 8, flexShrink: 0 }}>
-            <SidebarItem label="Todos los miembros" count={detail?.all_members.length || 0}
-              active={selectedView.kind === 'all'} onClick={() => setSelectedView({ kind: 'all' })} />
-            <SidebarItem label="Líderes" count={detail?.leaders.length || 0}
-              active={selectedView.kind === 'leaders'} onClick={() => setSelectedView({ kind: 'leaders' })} />
-            <div style={{ fontSize: 10, fontWeight: 700, color: C.muted, letterSpacing: '0.08em', padding: '14px 10px 6px' }}>POSICIONES</div>
-            {(detail?.positions || []).map(p => (
-              <SidebarItem key={p.id} label={p.name} count={p.member_count}
-                active={selectedView.kind === 'position' && selectedView.positionId === p.id}
-                onClick={() => setSelectedView({ kind: 'position', positionId: p.id })} />
-            ))}
-            <button onClick={() => setAddPositionOpen(true)}
-              style={{ width: '100%', marginTop: 6, padding: '8px 10px', borderRadius: 6,
-                background: 'transparent', border: `1px dashed ${C.border}`, color: C.muted,
-                fontSize: 12, cursor: 'pointer', textAlign: 'left' as const }}>
-              + Añadir posición
+          <div className="row" style={{ gap: 8, marginBottom: 8 }}>
+            <button className="btn btn-ghost btn-sm" onClick={onBack}>
+              <I.ChevLeft size={13}/> Personas
             </button>
+            <span className={'chip ' + (persona.role === 'admin' ? 't-accent' : persona.role === 'leader' ? 't-info' : 't-mono')}>{ROLE_LABEL[persona.role]}</span>
+            <span className={'chip ' + (persona.active ? 't-success' : '')}>
+              <span className="chip-dot"/>{persona.active ? 'Activo' : 'Inactivo'}
+            </span>
           </div>
-
-          <div style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', borderBottom: `1px solid ${C.border}` }}>
-              <h3 style={{ margin: 0, fontSize: 15, color: C.text }}>{visibleList.title}</h3>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <IconBtn title="Enviar correo" onClick={() => setEmailRecipients(visibleList.items)} disabled={visibleList.items.length === 0}>
-                  <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2}><path d="M4 6h16v12H4z" /><path d="M4 6l8 7 8-7" /></svg>
-                </IconBtn>
-                <IconBtn title="Imprimir / PDF" onClick={() => printTeamRoster(team, visibleList.title, visibleList.items)} disabled={visibleList.items.length === 0}>
-                  <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2}><path d="M6 9V3h12v6" /><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2" /><path d="M6 14h12v8H6z" /></svg>
-                </IconBtn>
-                {visibleList.canDelete && visibleList.deletePositionId && (
-                  <IconBtn title="Eliminar posición" danger onClick={() => deletePosition(visibleList.deletePositionId!)}>
-                    <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2}><path d="M3 6h18" /><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2" /><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" /></svg>
-                  </IconBtn>
-                )}
-              </div>
-            </div>
-
-            {loading ? (
-              <div style={{ padding: 40, textAlign: 'center', color: C.muted }}>Cargando…</div>
-            ) : (
-              <>
-                {selectedView.kind === 'position' && positionForAdding && (
-                  <div style={{ padding: '10px 18px', borderBottom: `1px solid ${C.border}`, background: C.bg }}>
-                    <button onClick={() => setAddMembersFor(positionForAdding)} style={{ ...s.btnGhost, padding: '6px 12px', fontSize: 12 }}>+ Añadir persona</button>
-                  </div>
-                )}
-                {selectedView.kind === 'leaders' && (
-                  <div style={{ padding: '10px 18px', borderBottom: `1px solid ${C.border}`, background: C.bg }}>
-                    <button onClick={() => setAddLeaderOpen(true)} style={{ ...s.btnGhost, padding: '6px 12px', fontSize: 12 }}>+ Añadir líder</button>
-                  </div>
-                )}
-                {visibleList.items.length === 0 ? (
-                  <div style={{ padding: '40px 16px', textAlign: 'center', color: C.muted, fontSize: 13 }}>
-                    {selectedView.kind === 'position'
-                      ? 'Aún no hay nadie en esta posición. Usa "Añadir persona" arriba.'
-                      : selectedView.kind === 'leaders'
-                        ? 'Aún no hay líderes. Usa "+ Añadir líder" arriba.'
-                        : 'Aún no hay miembros. Crea una posición y añade personas.'}
-                  </div>
-                ) : (
-                  <table style={s.planTable}>
-                    <thead>
-                      <tr>
-                        <th style={s.planTh}>Nombre</th>
-                        <th style={s.planTh}>Apellido</th>
-                        <th style={s.planTh}>Email</th>
-                        <th style={s.planTh}>Preferencias</th>
-                        {(selectedView.kind === 'position' || selectedView.kind === 'leaders') && <th style={s.planTh}></th>}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {visibleList.items.map(p => {
-                        const parts = (p.full_name || '').split(' ')
-                        const first = parts[0] || ''
-                        const last = parts.slice(1).join(' ')
-                        const prefMonth = p.preferences.max_per_month
-                        const prefDay = p.preferences.max_per_day
-                        const prefStr = (prefMonth == null && prefDay == null)
-                          ? 'Sin límite'
-                          : `${prefMonth != null ? prefMonth + '/mes' : '—'} · ${prefDay != null ? prefDay + '/día' : '—'}`
-                        const isSelf = currentMemberId === p.member_id
-                        const isLeaderLast = selectedView.kind === 'leaders' && (detail?.leaders.length || 0) <= 1
-                        const removeLeaderDisabled = selectedView.kind === 'leaders' && (isLeaderLast || (isSelf && (detail?.leaders.length || 0) <= 1))
-                        return (
-                          <tr key={p.member_id}>
-                            <td style={s.planTd}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                <div style={{ width: 26, height: 26, borderRadius: 999, background: p.avatar ? `url(${p.avatar}) center/cover` : C.soft, color: C.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
-                                  {!p.avatar && (first[0]?.toUpperCase() || p.email[0]?.toUpperCase())}
-                                </div>
-                                <button onClick={() => openPerson(p.member_id)}
-                                  style={{ background: 'none', border: 'none', padding: 0, fontWeight: 500, color: C.primary, cursor: 'pointer', fontSize: 13 }}
-                                  title="Ver perfil">{first || '—'}</button>
-                              </div>
-                            </td>
-                            <td style={{ ...s.planTd, color: C.text, fontSize: 13 }}>{last || '—'}</td>
-                            <td style={{ ...s.planTd, color: C.muted, fontSize: 12 }}>{p.email}</td>
-                            <td style={{ ...s.planTd, color: C.muted, fontSize: 12 }}>{prefStr}</td>
-                            {selectedView.kind === 'position' && (
-                              <td style={{ ...s.planTd, textAlign: 'right' as const }}>
-                                <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, color: C.danger, borderColor: 'rgba(239,68,68,.3)' }}
-                                  onClick={() => removeMemberFromPosition(selectedView.positionId!, p.member_id)}>Quitar</button>
-                              </td>
-                            )}
-                            {selectedView.kind === 'leaders' && (
-                              <td style={{ ...s.planTd, textAlign: 'right' as const }}>
-                                <button disabled={removeLeaderDisabled}
-                                  title={removeLeaderDisabled ? (isSelf ? 'No puedes quitarte si eres el único líder' : 'El equipo debe tener al menos un líder') : 'Quitar líder'}
-                                  style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12,
-                                    color: removeLeaderDisabled ? C.muted : C.danger,
-                                    borderColor: removeLeaderDisabled ? C.border : 'rgba(239,68,68,.3)',
-                                    cursor: removeLeaderDisabled ? 'not-allowed' : 'pointer',
-                                    opacity: removeLeaderDisabled ? 0.55 : 1 }}
-                                  onClick={() => removeLeader(p.member_id)}>Quitar</button>
-                              </td>
-                            )}
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                )}
-              </>
-            )}
-          </div>
+          <h1 className="page-title">{persona.name.split(' ')[0]} <em>{persona.name.split(' ').slice(1).join(' ')}</em></h1>
+          <p className="page-sub mono" style={{ fontSize: 13 }}>{persona.email}</p>
         </div>
-      )}
-
-      {addPositionOpen && (
-        <AddPositionModal slug={slug} teamId={team.id}
-          existingNames={(detail?.positions || []).map(p => p.name)}
-          onCreated={p => { reload(); setSelectedView({ kind: 'position', positionId: p.id }) }}
-          onClose={() => setAddPositionOpen(false)} />
-      )}
-
-      {addLeaderOpen && (
-        <AddLeaderModal slug={slug} teamId={team.id}
-          orgMembers={orgMembers}
-          excludedIds={new Set(detail?.leaders.map(l => l.member_id) || [])}
-          onAdded={t => { onTeamChanged(t); reload(); setAddLeaderOpen(false) }}
-          onClose={() => setAddLeaderOpen(false)} />
-      )}
-
-      {addMembersFor && (
-        <AddPersonsToPositionModal slug={slug} teamId={team.id} position={addMembersFor}
-          orgMembers={orgMembers}
-          serviceMemberIds={serviceMemberIds}
-          excludedIds={new Set(addMembersFor.members.map(m => m.member_id))}
-          onDone={(newlyEnrolled, alreadyEnrolledAdded) => {
-            reload()
-            reloadServiceMembers()
-            onPeopleInvalidate?.()
-            setAddMembersFor(null)
-            if (newlyEnrolled.length > 0) {
-              setWelcomeQueue(prev => [...prev, ...newlyEnrolled.map(p => ({ p, kind: 'welcome' as const }))])
-            }
-            if (alreadyEnrolledAdded.length > 0) {
-              setWelcomeQueue(prev => [...prev, ...alreadyEnrolledAdded.map(p => ({ p, kind: 'team_welcome' as const }))])
-            }
-          }}
-          onClose={() => setAddMembersFor(null)} />
-      )}
-
-      {welcomeQueue.length > 0 && (
-        <ComposeEmailModal
-          slug={slug}
-          defaultRecipient={welcomeQueue[0].p}
-          autoApplyKind={welcomeQueue[0].kind}
-          contextTeamId={welcomeQueue[0].kind === 'team_welcome' ? team.id : undefined}
-          onClose={() => setWelcomeQueue(q => q.slice(1))}
-          onSent={() => setWelcomeQueue(q => q.slice(1))} />
-      )}
-
-      {emailRecipients && (
-        <TeamBulkEmailModal slug={slug} recipients={emailRecipients} teamId={team.id}
-          onClose={() => setEmailRecipients(null)}
-          onSent={() => setEmailRecipients(null)} />
-      )}
-
-      {editingTeamOpen && (
-        <TeamFormModal slug={slug} initial={team}
-          orgMembers={orgMembers} types={types} currentMemberId={currentMemberId}
-          onSaved={t => { onTeamChanged(t); setEditingTeamOpen(false); reload() }}
-          onClose={() => setEditingTeamOpen(false)} />
-      )}
-    </main>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Placeholder for tabs not yet implemented
-// ─────────────────────────────────────────────────────────────────────────────
-function PlaceholderView({ title, subtitle }: { title: string; subtitle: string }) {
-  return (
-    <main style={{ ...s.main, alignItems: 'center', justifyContent: 'center', display: 'flex' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: 40, textAlign: 'center', maxWidth: 360 }}>
-        <div style={{ width: 64, height: 64, borderRadius: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#DC2626', color: '#fff' }}>
-          <svg viewBox="0 0 20 20" fill="currentColor" width={26} height={26}>
-            <path fillRule="evenodd" d="M10 2a8 8 0 100 16A8 8 0 0010 2zm1 4a1 1 0 10-2 0v3H6a1 1 0 000 2h3v3a1 1 0 102 0v-3h3a1 1 0 100-2h-3V6z" clipRule="evenodd" />
-          </svg>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn btn-secondary"><I.Send size={14}/> Mensaje</button>
+          <button className="btn btn-secondary"><I.Edit size={14}/> Editar</button>
         </div>
-        <h2 style={{ fontSize: 22, fontWeight: 700, color: C.text, margin: 0 }}>{title}</h2>
-        <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.6, margin: 0 }}>{subtitle}</p>
-        <span style={{ ...s.pill, background: C.primaryLight, color: C.primary, textTransform: 'uppercase', letterSpacing: '0.06em', padding: '4px 14px' }}>Próximamente</span>
       </div>
-    </main>
+
+      <div className="grid grid-12 rise rise-d2">
+        <section className="col-4 card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 24px', gap: 14 }}>
+          <div className="av" data-c={persona.c} style={{ width: 84, height: 84, fontSize: 28, borderRadius: 22 }}>
+            {PersonaInitials(persona.name)}
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 17, fontWeight: 600 }}>{persona.name}</div>
+            <div style={{ fontSize: 12.5, color: 'var(--text-3)', marginTop: 2 }}>{persona.team}</div>
+          </div>
+          <div className="divider" style={{ width: '100%' }}/>
+          <div style={{ width: '100%', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, textAlign: 'center' }}>
+            <div>
+              <div className="display-sans" style={{ fontSize: 22 }}>12</div>
+              <div style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'uppercase' }}>Servicios</div>
+            </div>
+            <div>
+              <div className="display-sans" style={{ fontSize: 22 }}>94<span style={{ color: 'var(--text-3)', fontSize: 14 }}>%</span></div>
+              <div style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'uppercase' }}>Confirmados</div>
+            </div>
+          </div>
+        </section>
+        <section className="col-8 card">
+          <div className="card-head"><div className="card-title">Información</div></div>
+          <div>
+            {[
+              { l: 'Email',        v: persona.email,  mono: true },
+              { l: 'Teléfono',     v: persona.phone,  mono: true },
+              { l: 'Equipo',       v: persona.team },
+              { l: 'Rol',          v: ROLE_LABEL[persona.role] },
+              { l: 'Última actividad', v: persona.lastSeen },
+              { l: 'Alta',         v: persona.joined, mono: true },
+            ].map((r, i) => (
+              <div key={i} className="list-row" style={{ borderRadius: 0 }}>
+                <div className="list-body" style={{ display: 'grid', gridTemplateColumns: '160px 1fr', alignItems: 'center', gap: 16 }}>
+                  <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>{r.l}</div>
+                  <div className={r.mono ? 'mono' : ''} style={{ fontSize: 13.5 }}>{r.v}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
   )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Entry
+// Root (port of app.jsx::App)
 // ─────────────────────────────────────────────────────────────────────────────
 export default function Servicios({ tab, resetSignal }: { tab: ServiciosTab; resetSignal?: number }) {
   const { slug } = useParams<{ slug: string }>()
-  const [types, setTypes] = useState<ServiceType[]>([])
-  const [teams, setTeams] = useState<Team[]>([])
-  const [loading, setLoading] = useState(true)
-  const [createOpen, setCreateOpen] = useState(false)
+  const navigate = useNavigate()
+  const [appearance, setAppearance] = useAppearance()
+  const [sbMode, toggleSb] = useSidebarMode()
 
-  const refresh = useCallback(async () => {
-    if (!slug) return
-    setLoading(true)
-    try {
-      const [ts, tm] = await Promise.all([
-        api(`/api/v1/tenant/${slug}/services/types`).then(r => r.ok ? r.json() : []).catch(() => []),
-        api(`/api/v1/tenant/${slug}/teams`).then(r => r.ok ? r.json() : []).catch(() => []),
-      ])
-      setTypes(ts); setTeams(tm)
-    } finally { setLoading(false) }
+  // User
+  const [user, setUser] = useState<{ name: string; role: string; initials: string; firstName: string }>({
+    name: '—', role: 'Miembro', initials: '··', firstName: '—',
+  })
+  useEffect(() => {
+    api(`/api/v1/tenant/${slug}/auth/me`).then(r => r.ok ? r.json() : null).then(me => {
+      if (!me) return
+      const n = (me.full_name as string) || (me.email as string) || 'Tu nombre'
+      const parts = n.split(' ').filter(Boolean)
+      setUser({
+        name: n,
+        role: me.org_role === 'admin' ? 'Administrador' : me.org_role === 'leader' ? 'Líder' : 'Miembro',
+        initials: parts.slice(0,2).map((w: string) => w[0]).join('').toUpperCase(),
+        firstName: parts[0] || '',
+      })
+    })
   }, [slug])
 
-  useEffect(() => { refresh() }, [refresh])
+  // Internal selected person / drill-down to PlanDetail or CancionDetail
+  const [selectedPerson, setSelectedPerson] = useState<UiPersona | null>(null)
+  const [drilldown, setDrilldown] = useState<'plan' | 'song' | null>(null)
+  useEffect(() => { setSelectedPerson(null); setDrilldown(null) }, [tab, resetSignal])
 
-  if (tab === 'personas') {
-    return <PersonasView slug={slug!} teams={teams} setTeams={setTeams} types={types} resetSignal={resetSignal} />
+  if (tab === 'legacy') {
+    return <ServiciosLegacy tab="servicios" resetSignal={resetSignal}/>
   }
 
-  if (tab !== 'servicios') {
-    const META: Record<ServiciosTab, { title: string; sub: string }> = {
-      'mi-planificacion': { title: 'Mi Planificación', sub: 'Ve y gestiona tu planificación personal de servicios y ensayos.' },
-      'servicios':        { title: 'Servicios', sub: '' },
-      'canciones':        { title: 'Canciones', sub: 'Biblioteca de canciones con acordes, letras y partituras para tu equipo.' },
-      'media':            { title: 'Media', sub: 'Gestiona imágenes, vídeos y archivos multimedia para tus servicios.' },
-      'personas':         { title: 'Personas', sub: 'Gestiona los voluntarios y líderes que participan en los servicios.' },
-    }
-    return <PlaceholderView title={META[tab].title} subtitle={META[tab].sub} />
+  const { theme, style } = appearanceAttrs(appearance)
+  const org = { name: slug?.replace(/-/g, ' ').replace(/(?:^|\s)\S/g, c => c.toUpperCase()) || 'Iglesia' }
+
+  const crumbMap: Record<ServiciosTab, string[]> = {
+    'mi-planificacion': ['Iglesia', 'Mi planificación'],
+    'servicios':        drilldown === 'plan' ? ['Iglesia', 'Servicios', 'Servicio Dominical · 31 May'] : ['Iglesia', 'Servicios'],
+    'canciones':        drilldown === 'song' ? ['Iglesia', 'Canciones', 'Maravilloso es'] : ['Iglesia', 'Canciones'],
+    'media':            ['Iglesia', 'Media'],
+    'personas':         selectedPerson ? ['Iglesia', 'Personas', selectedPerson.name] : ['Iglesia', 'Personas'],
+    'legacy':           ['Iglesia', 'Vista antigua'],
+  }
+  const crumbs = crumbMap[tab]
+
+  const nav = (id: ServiciosTab) => {
+    setSelectedPerson(null); setDrilldown(null)
+    navigate(`/portal/${slug}/servicios/${id}`)
   }
 
-  if (loading) {
-    return (
-      <main style={{ ...s.main, alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 14 }}>
-        Cargando…
-      </main>
-    )
+  const onLogout = async () => {
+    try { await api('/api/v1/tenant/auth/logout', { method: 'POST' }) } catch {}
+    window.location.href = '/portal'
   }
 
-  if (types.length === 0) {
-    return (
-      <>
-        <WelcomeView onCreate={() => setCreateOpen(true)} />
-        {createOpen && slug && (
-          <CreateTypeWizard slug={slug} teams={teams}
-            onCreated={t => { setTypes([t]); setCreateOpen(false) }}
-            onClose={() => setCreateOpen(false)} />
-        )}
-      </>
-    )
-  }
-
-  return <ListView slug={slug!} types={types} setTypes={setTypes} teams={teams} />
+  return (
+    <div className="tenant-v2" data-theme={theme} data-style={style}
+      style={{ position: 'fixed', inset: 0, zIndex: 50, overflow: 'auto' }}>
+      <div className="app" data-sb={sbMode}>
+        <Sidebar route={tab} onNav={nav} sb={sbMode} onSbToggle={toggleSb} user={user} org={org}/>
+        <main style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <Topbar crumbs={crumbs} onSbToggle={toggleSb} theme={theme} appearance={appearance} setAppearance={setAppearance} onLogout={onLogout}/>
+          {tab === 'mi-planificacion' && <MiPlanificacion userFirstName={user.firstName} onOpenPlan={() => { setDrilldown('plan'); navigate(`/portal/${slug}/servicios/servicios`) }}/>}
+          {tab === 'servicios' && (drilldown === 'plan'
+            ? <PlanDetail onBack={() => setDrilldown(null)}/>
+            : <ServiciosList slug={slug!} onOpenPlan={() => setDrilldown('plan')}/>)}
+          {tab === 'canciones' && (drilldown === 'song'
+            ? <CancionDetail onBack={() => setDrilldown(null)}/>
+            : <Canciones onOpenSong={() => setDrilldown('song')}/>)}
+          {tab === 'media' && <Media/>}
+          {tab === 'personas' && (selectedPerson
+            ? <PersonaDetail persona={selectedPerson} onBack={() => setSelectedPerson(null)}/>
+            : <Personas slug={slug!} onOpenPerson={setSelectedPerson}/>)}
+        </main>
+      </div>
+    </div>
+  )
 }

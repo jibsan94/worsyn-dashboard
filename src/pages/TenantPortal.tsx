@@ -11,7 +11,7 @@ interface OrgInfo {
 type Screen       = 'loading' | 'not-found' | 'login' | 'app'
 type TModule      = 'principal' | 'servicios' | 'miembros' | 'equipos' | 'partituras' | 'eventos' | 'ensayos' | 'calendario' | 'finanzas' | 'configuracion' | 'perfil'
 type MiembrosTab   = 'dashboard' | 'miembros' | 'flujos' | 'formularios'
-type ServiciosTab  = 'mi-planificacion' | 'servicios' | 'canciones' | 'media' | 'personas'
+type ServiciosTab  = 'mi-planificacion' | 'servicios' | 'canciones' | 'media' | 'personas' | 'legacy'
 type MiembrosView = 'todas' | 'ministerio' | 'nuevos'
 type OrgRole      = 'admin' | 'leader' | 'member'
 type SettingsTab  = 'general' | 'ministerios' | 'roles' | 'admins' | 'integraciones' | 'facturacion'
@@ -303,7 +303,7 @@ export default function TenantPortal() {
 
   // Sub-tabs — also URL-driven via :tab segment
   const MIEMBROS_TABS: MiembrosTab[] = ['dashboard','miembros','flujos','formularios']
-  const SERVICIOS_TABS: ServiciosTab[] = ['mi-planificacion','servicios','canciones','media','personas']
+  const SERVICIOS_TABS: ServiciosTab[] = ['mi-planificacion','servicios','canciones','media','personas','legacy']
   const SETTINGS_TABS: SettingsTab[] = ['general','ministerios','roles','admins','integraciones','facturacion']
   const miembrosTab: MiembrosTab = (MIEMBROS_TABS.includes(urlTab as MiembrosTab) ? urlTab : 'miembros') as MiembrosTab
   const serviciosTab: ServiciosTab = (SERVICIOS_TABS.includes(urlTab as ServiciosTab) ? urlTab : 'servicios') as ServiciosTab
@@ -1010,10 +1010,11 @@ export default function TenantPortal() {
           )}
           {module === 'servicios' && (
             <nav style={s.tabNav}>
-              {(['mi-planificacion', 'servicios', 'canciones', 'media', 'personas'] as ServiciosTab[]).map(tab => {
+              {(['mi-planificacion', 'servicios', 'canciones', 'media', 'personas', 'legacy'] as ServiciosTab[]).map(tab => {
                 const labels: Record<ServiciosTab, string> = {
                   'mi-planificacion': 'Mi Planificación', 'servicios': 'Servicios',
                   'canciones': 'Canciones', 'media': 'Media', 'personas': 'Personas',
+                  'legacy': '← Vista antigua',
                 }
                 const isActive  = serviciosTab === tab
                 const isHovered = hoveredSvcTab === tab
