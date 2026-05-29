@@ -2520,7 +2520,7 @@ function TemplateEditorModal({ slug, kind, initial, onSaved, onClose }: {
 // ─────────────────────────────────────────────────────────────────────────────
 // PersonDetailView — full person profile (Scheduling | Communication | Details)
 // ─────────────────────────────────────────────────────────────────────────────
-function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
+export function PersonDetailView({ slug, person, allTeams, onBack, onChanged }: {
   slug: string
   person: ServicePerson
   allTeams: Team[]
@@ -5017,7 +5017,7 @@ function TeamSettingsTab({ slug, team, allTeams, types, onTeamChanged, onTeamDel
   )
 }
 
-function TeamDetailView({ slug, team, allTeams, orgMembers, types, currentMemberId, onBack, onTeamChanged, onTeamDeleted, onPeopleInvalidate, onOpenPerson }: {
+export function TeamDetailView({ slug, team, allTeams, orgMembers, types, currentMemberId, onBack, onTeamChanged, onTeamDeleted, onPeopleInvalidate, onOpenPerson }: {
   slug: string
   team: Team
   allTeams: Team[]

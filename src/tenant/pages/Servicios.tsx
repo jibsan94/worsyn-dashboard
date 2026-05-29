@@ -9,7 +9,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import ServiciosLegacy from './ServiciosLegacy'
+import ServiciosLegacy, { PersonDetailView as LegacyPersonDetailView, TeamDetailView as LegacyTeamDetailView } from './ServiciosLegacy'
 import { I } from '../components/IconsV2'
 import '../styles/tenant.css'
 
@@ -1637,8 +1637,14 @@ function FilterSelect({ value, onChange, options }: { value: string; onChange: (
   )
 }
 
-function Personas({ slug, onOpenPerson }: { slug: string; onOpenPerson: (p: UiPersona) => void }) {
+function Personas({ slug, allTeams, onOpenPerson, onOpenTeam }: {
+  slug: string
+  allTeams: any[]
+  onOpenPerson: (raw: any) => void
+  onOpenTeam: (team: any) => void
+}) {
   const [data, setData] = useState<UiPersona[]>([])
+  const [rawData, setRawData] = useState<any[]>([])
   useEffect(() => {
     api(`/api/v1/tenant/${slug}/services/people`).then(r => r.ok ? r.json() : []).then((ppl: ApiPerson[]) => {
       const mapped: UiPersona[] = (ppl || []).map((p, i) => {
@@ -1651,8 +1657,13 @@ function Personas({ slug, onOpenPerson }: { slug: string; onOpenPerson: (p: UiPe
         }
       })
       setData(mapped)
+      setRawData(ppl as any[])
     })
   }, [slug])
+  const openRaw = (uiId: string) => {
+    const raw = rawData.find(r => r.id === uiId)
+    if (raw) onOpenPerson(raw)
+  }
   const [tab, setTab] = useState<'miembros' | 'equipos'>('miembros')
   const [search, setSearch] = useState('')
   const [fRole, setFRole] = useState('')
@@ -1766,7 +1777,7 @@ function Personas({ slug, onOpenPerson }: { slug: string; onOpenPerson: (p: UiPe
                     Ningún miembro coincide con los filtros.
                   </td></tr>
                 ) : filtered.map(p => (
-                  <tr key={p.id} style={{ cursor: 'pointer' }} onClick={() => onOpenPerson(p)}>
+                  <tr key={p.id} style={{ cursor: 'pointer' }} onClick={() => openRaw(p.id)}>
                     <td><div className="av" data-c={p.c}>{PersonaInitials(p.name)}</div></td>
                     <td>
                       <div style={{ fontWeight: 600, fontSize: 13.5 }}>{p.name}</div>
@@ -1791,7 +1802,7 @@ function Personas({ slug, onOpenPerson }: { slug: string; onOpenPerson: (p: UiPe
         ) : (
           <div style={{ padding: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
             {filtered.map(p => (
-              <button key={p.id} onClick={() => onOpenPerson(p)} className="lift" style={{ background: 'var(--surface-2)', border: '1px solid var(--separator)', borderRadius: 14, padding: 16, textAlign: 'left' as const, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <button key={p.id} onClick={() => openRaw(p.id)} className="lift" style={{ background: 'var(--surface-2)', border: '1px solid var(--separator)', borderRadius: 14, padding: 16, textAlign: 'left' as const, display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div className="row-between">
                   <div className="av av-lg" data-c={p.c}>{PersonaInitials(p.name)}</div>
                   <span className={'chip ' + (p.active ? 't-success' : '')} style={{ height: 20, fontSize: 10 }}>{p.active ? 'Activo' : 'Inactivo'}</span>
@@ -1822,38 +1833,37 @@ function Personas({ slug, onOpenPerson }: { slug: string; onOpenPerson: (p: UiPe
             <button className="btn btn-secondary btn-sm"><I.Plus size={12}/> Nuevo equipo</button>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 'var(--gap)' }}>
-            {teams.map((tname, ti) => {
-              const members = data.filter(p => p.team === tname)
-              const activeCount = members.filter(p => p.active).length
-              const leader = members.find(p => p.role === 'leader') || members.find(p => p.role === 'admin')
+            {allTeams.map((team: any, ti: number) => {
               const colors = ['#0A84FF','#AF52DE','#FF9500','#FF2D55','#5AC8FA','#34C759','#FFD60A']
-              const color = colors[ti % colors.length]
+              const color = team.color || colors[ti % colors.length]
+              const memberCount = team.member_count ?? 0
               return (
-                <div key={tname} className="card lift" style={{ padding: 18, cursor: 'pointer' }}>
+                <div key={team.id} className="card lift" style={{ padding: 18, cursor: 'pointer' }} onClick={() => onOpenTeam(team)}>
                   <div className="row-between" style={{ marginBottom: 14 }}>
                     <div style={{ width: 40, height: 40, borderRadius: 12, background: color + '1F', color, display: 'grid', placeItems: 'center' }}><I.People size={18}/></div>
-                    <span className="mono" style={{ fontSize: 10, color: 'var(--text-3)', letterSpacing: 0.08, textTransform: 'uppercase' }}>{members.length} miembros</span>
+                    <span className="mono" style={{ fontSize: 10, color: 'var(--text-3)', letterSpacing: 0.08, textTransform: 'uppercase' }}>{memberCount} miembros</span>
                   </div>
-                  <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em' }}>{tname}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 3 }}>{leader ? <>Líder · {leader.name}</> : 'Sin líder asignado'}</div>
-                  <div className="av-stack" style={{ marginTop: 14 }}>
-                    {members.slice(0,5).map(p => (
-                      <div key={p.id} className="av av-sm" data-c={p.c} title={p.name}>{PersonaInitials(p.name)}</div>
-                    ))}
-                    {members.length > 5 && (
-                      <div className="av av-sm" style={{ background: 'var(--surface-3)', color: 'var(--text-3)', border: '2px solid var(--surface)' }}>+{members.length - 5}</div>
-                    )}
+                  <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em' }}>{team.name}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 3 }}>
+                    {team.leaders && team.leaders.length > 0
+                      ? <>Líder · {team.leaders[0].full_name || team.leaders[0].email}</>
+                      : 'Sin líder asignado'}
                   </div>
-                  <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--separator)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span className="chip t-success" style={{ height: 20, fontSize: 10.5 }}>
-                      <span className="chip-dot" style={{ background: 'currentColor' }}/>{activeCount} activos
-                    </span>
+                  <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--separator)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    {team.is_rehearsal && <span className="chip" style={{ height: 20, fontSize: 10 }}>Ensayo</span>}
+                    {team.is_secure && <span className="chip" style={{ height: 20, fontSize: 10 }}>Seguro</span>}
+                    {team.is_split && <span className="chip" style={{ height: 20, fontSize: 10 }}>Dividido</span>}
                     <span style={{ flex: 1 }}/>
                     <span className="list-chev"><I.Chev size={14}/></span>
                   </div>
                 </div>
               )
             })}
+            {allTeams.length === 0 && (
+              <div style={{ gridColumn: '1 / -1', padding: 40, textAlign: 'center' as const, color: 'var(--text-3)', fontSize: 13 }}>
+                No hay equipos creados aún.
+              </div>
+            )}
           </div>
         </section>
       </div>
@@ -1974,9 +1984,24 @@ export default function Servicios({ tab, resetSignal }: { tab: ServiciosTab; res
     })
   }, [slug])
 
-  const [selectedPerson, setSelectedPerson] = useState<UiPersona | null>(null)
+  const [selectedPerson, setSelectedPerson] = useState<any | null>(null)
+  const [selectedTeam, setSelectedTeam] = useState<any | null>(null)
   const [drill, setDrill] = useState<'plan' | 'song' | null>(null)
-  useEffect(() => { setSelectedPerson(null); setDrill(null) }, [tab, resetSignal])
+  useEffect(() => { setSelectedPerson(null); setSelectedTeam(null); setDrill(null) }, [tab, resetSignal])
+
+  // Shared data needed by legacy PersonDetailView + TeamDetailView
+  const [allTeams, setAllTeams] = useState<any[]>([])
+  const [orgMembers, setOrgMembers] = useState<any[]>([])
+  const [allTypes, setAllTypes] = useState<any[]>([])
+  const [currentMemberId, setCurrentMemberId] = useState<string | null>(null)
+  const reloadSharedData = React.useCallback(() => {
+    if (!slug) return
+    api(`/api/v1/tenant/${slug}/teams`).then(r => r.ok ? r.json() : []).then(setAllTeams).catch(() => {})
+    api(`/api/v1/tenant/${slug}/members`).then(r => r.ok ? r.json() : []).then(setOrgMembers).catch(() => {})
+    api(`/api/v1/tenant/${slug}/services/types`).then(r => r.ok ? r.json() : []).then(setAllTypes).catch(() => {})
+    api(`/api/v1/tenant/${slug}/auth/me`).then(r => r.ok ? r.json() : null).then(me => setCurrentMemberId(me?.id || null)).catch(() => {})
+  }, [slug])
+  useEffect(() => { reloadSharedData() }, [reloadSharedData])
 
   if (tab === 'legacy') return <ServiciosLegacy tab="servicios" resetSignal={resetSignal}/>
 
@@ -1991,10 +2016,11 @@ export default function Servicios({ tab, resetSignal }: { tab: ServiciosTab; res
   const crumbs = ['Iglesia', labels[tab as Exclude<ServiciosTab, 'legacy'>]]
   if (tab === 'servicios' && drill === 'plan') crumbs.push('Servicio Dominical · 31 May')
   if (tab === 'canciones' && drill === 'song') crumbs.push('Maravilloso es')
-  if (tab === 'personas' && selectedPerson) crumbs.push(selectedPerson.name)
+  if (tab === 'personas' && selectedPerson) crumbs.push(selectedPerson.full_name || selectedPerson.email)
+  if (tab === 'personas' && selectedTeam) crumbs.push(selectedTeam.name)
 
   const nav = (id: ServiciosTab) => {
-    setSelectedPerson(null); setDrill(null)
+    setSelectedPerson(null); setSelectedTeam(null); setDrill(null)
     window.location.assign(`/portal/${slug}/servicios/${id}`)
   }
 
@@ -2009,7 +2035,28 @@ export default function Servicios({ tab, resetSignal }: { tab: ServiciosTab; res
           {tab === 'servicios' && (drill === 'plan' ? <PlanDetail onBack={() => setDrill(null)}/> : <ServiciosList onOpenPlan={() => setDrill('plan')}/>)}
           {tab === 'canciones' && (drill === 'song' ? <CancionDetail onBack={() => setDrill(null)}/> : <Canciones onOpenSong={() => setDrill('song')}/>)}
           {tab === 'media' && <Media/>}
-          {tab === 'personas' && (selectedPerson ? <PersonaDetail persona={selectedPerson} onBack={() => setSelectedPerson(null)}/> : <Personas slug={slug!} onOpenPerson={setSelectedPerson}/>)}
+          {tab === 'personas' && (
+            selectedPerson
+              ? <LegacyPersonDetailView slug={slug!} person={selectedPerson} allTeams={allTeams}
+                  onBack={() => setSelectedPerson(null)}
+                  onChanged={(p: any) => setSelectedPerson(p)} />
+              : selectedTeam
+                ? <LegacyTeamDetailView slug={slug!} team={selectedTeam} allTeams={allTeams}
+                    orgMembers={orgMembers} types={allTypes} currentMemberId={currentMemberId}
+                    onBack={() => setSelectedTeam(null)}
+                    onTeamChanged={(t: any) => { setSelectedTeam(t); reloadSharedData() }}
+                    onTeamDeleted={() => { setSelectedTeam(null); reloadSharedData() }}
+                    onPeopleInvalidate={reloadSharedData}
+                    onOpenPerson={(smId: string) => {
+                      api(`/api/v1/tenant/${slug}/services/people`).then(r => r.ok ? r.json() : []).then((ppl: any[]) => {
+                        const p = ppl.find(x => x.id === smId)
+                        if (p) { setSelectedTeam(null); setSelectedPerson(p) }
+                      })
+                    }} />
+                : <Personas slug={slug!} allTeams={allTeams}
+                    onOpenPerson={setSelectedPerson}
+                    onOpenTeam={setSelectedTeam}/>
+          )}
         </main>
       </div>
     </div>

@@ -67,6 +67,39 @@
 .tenant-v2 input, .tenant-v2 select, .tenant-v2 textarea { font: inherit; color: inherit; background: none; border: 0; }
 .tenant-v2 svg { display: inline-block; vertical-align: middle; }
 
+/* Force base button-like elements to be CLEAN: no UA gray bg, no border, no inherited shadow.
+   Variants (.btn-primary / .btn-secondary / .seg-btn.is-active) re-apply their own bg/border. */
+.tenant-v2 .btn,
+.tenant-v2 .seg-btn,
+.tenant-v2 .icon-btn,
+.tenant-v2 .sb-link,
+.tenant-v2 .sb-toggle,
+.tenant-v2 .sb-user,
+.tenant-v2 .list-row,
+.tenant-v2 .tb-search,
+.tenant-v2 .req-card,
+.tenant-v2 .arr-add,
+.tenant-v2 .arr-file {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+/* Re-apply variants */
+.tenant-v2 .btn-primary { background: var(--accent); color: var(--on-accent); }
+.tenant-v2 .btn-primary:hover { background: var(--accent-strong); }
+.tenant-v2 .btn-secondary { background: var(--surface-3); color: var(--text); border: 1px solid var(--hairline); }
+.tenant-v2 .btn-secondary:hover { background: color-mix(in oklab, var(--surface-3) 50%, var(--surface)); }
+.tenant-v2 .seg { background: var(--surface-3); }
+.tenant-v2 .seg-btn.is-active { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+.tenant-v2 .req-card { background: var(--surface); border: 1px solid var(--separator); box-shadow: var(--shadow-1); }
+.tenant-v2 .tb-search { background: var(--surface-3); border: 1px solid transparent; }
+.tenant-v2 .tb-search:hover { background: color-mix(in oklab, var(--surface-3) 60%, var(--surface)); }
+.tenant-v2 .list-row:hover { background: var(--surface-3); }
+.tenant-v2 .sb-link:hover { background: var(--surface-3); }
+.tenant-v2 .sb-toggle:hover { background: var(--surface-3); }
+.tenant-v2 .sb-user:hover { background: var(--surface-3); }
+.tenant-v2 .icon-btn:hover { background: var(--surface-3); color: var(--text); }
+
 
 .tenant-v2, .tenant-v2 [data-theme="light"][data-style="clean"] {
   --bg:            #F7F8FA;
