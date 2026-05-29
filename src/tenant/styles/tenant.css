@@ -1,20 +1,74 @@
-/* ============================================================
-   Worsyn · Tenant Servicios V2 — 1:1 port of /mnt/Worsyn/src/styles.css
-   Scoped to .tenant-v2 wrapper.
-   ============================================================ */
+/* Worsyn · Tenant V2 — verbatim port of handoff styles.css (scoped to .tenant-v2) */
 @import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800&family=Geist+Mono:wght@400;500&display=swap');
-
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
 
-
-
-.tenant-v2 /* ============================================================
-   Worsyn — Rediseño
-   Design tokens (Apple-clean foundation + Futurist variant)
+/* ============================================================
+   RESET — neutralize ALL admin /src/index.css leaks before proto rules.
+   Admin defines .card, .btn, .icon-btn, .content, .grid, .col-N, .eyebrow,
+   .input, .chip, .av etc. with conflicting padding/border-radius/display/font.
+   Forcing baseline so the prototype's intent prevails.
    ============================================================ */
+.tenant-v2 .card,
+.tenant-v2 .card-head,
+.tenant-v2 .card-body,
+.tenant-v2 .card-title,
+.tenant-v2 .card-sub,
+.tenant-v2 .btn,
+.tenant-v2 .icon-btn,
+.tenant-v2 .input,
+.tenant-v2 .chip,
+.tenant-v2 .pill-tone,
+.tenant-v2 .av,
+.tenant-v2 .seg,
+.tenant-v2 .seg-btn,
+.tenant-v2 .tbl,
+.tenant-v2 .tbl th,
+.tenant-v2 .tbl td,
+.tenant-v2 .list-row,
+.tenant-v2 .list-leading,
+.tenant-v2 .list-body,
+.tenant-v2 .list-title,
+.tenant-v2 .list-sub,
+.tenant-v2 .list-trail,
+.tenant-v2 .content,
+.tenant-v2 .grid,
+.tenant-v2 .grid-12,
+.tenant-v2 .col-3,
+.tenant-v2 .col-4,
+.tenant-v2 .col-6,
+.tenant-v2 .col-8,
+.tenant-v2 .col-12,
+.tenant-v2 .eyebrow,
+.tenant-v2 .page-head,
+.tenant-v2 .page-title,
+.tenant-v2 .page-sub,
+.tenant-v2 .row,
+.tenant-v2 .row-between,
+.tenant-v2 .stack,
+.tenant-v2 .divider,
+.tenant-v2 .mono,
+.tenant-v2 .num {
+  all: revert-layer;
+}
 
-/* -------- Tokens (Light, .tenant-v2 Clean — bright Apple-inspired) -------- */
-:root, .tenant-v2 [data-theme="light"][data-style="clean"] {
+/* Body / wrapper defaults (must come after revert) */
+.tenant-v2 {
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, system-ui, sans-serif !important;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+}
+.tenant-v2 *,
+.tenant-v2 *::before,
+.tenant-v2 *::after { box-sizing: border-box; }
+.tenant-v2 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+.tenant-v2 input, .tenant-v2 select, .tenant-v2 textarea { font: inherit; color: inherit; background: none; border: 0; }
+.tenant-v2 svg { display: inline-block; vertical-align: middle; }
+
+
+.tenant-v2, .tenant-v2 [data-theme="light"][data-style="clean"] {
   --bg:            #F7F8FA;
   --surface:       #FFFFFF;
   --surface-2:     #F4F5F7;
@@ -28,18 +82,18 @@
   --text-3:        #6E6E73;
   --text-4:        #A0A0A6;
 
-  --accent:        #0A84FF;            /* vivid Apple blue */
+  --accent:        #0A84FF;            
   --accent-tint:   rgba(10,132,255,0.10);
   --accent-strong: #0066D6;
   --on-accent:     #FFFFFF;
 
-  --accent-2:      #34C759;            /* green */
+  --accent-2:      #34C759;            
   --accent-2-tint: rgba(52,199,89,0.14);
-  --accent-3:      #FF9500;            /* orange */
+  --accent-3:      #FF9500;            
   --accent-3-tint: rgba(255,149,0,0.14);
-  --accent-4:      #AF52DE;            /* purple */
+  --accent-4:      #AF52DE;            
   --accent-4-tint: rgba(175,82,222,0.14);
-  --accent-5:      #FF2D55;            /* pink */
+  --accent-5:      #FF2D55;            
   --accent-5-tint: rgba(255,45,85,0.14);
 
   --danger:        #FF3B30;
@@ -62,8 +116,7 @@
   --row-h: calc(44px * var(--density));
 }
 
-.tenant-v2 /* -------- Tokens (Dark, .tenant-v2 Clean — bright Apple-inspired) -------- */
-[data-theme="dark"][data-style="clean"] {
+.tenant-v2 [data-theme="dark"][data-style="clean"] {
   --bg:            #000000;
   --surface:       #1C1C1E;
   --surface-2:     #2C2C2E;
@@ -100,8 +153,7 @@
   --shadow-3: 0 24px 60px -12px rgba(0,0,0,0.8), 0 2px 8px rgba(0,0,0,0.4);
 }
 
-.tenant-v2 /* -------- Tokens (Light, .tenant-v2 Futurist) -------- */
-[data-theme="light"][data-style="futurist"] {
+.tenant-v2 [data-theme="light"][data-style="futurist"] {
   --bg:            #ECEEF3;
   --surface:       rgba(255,255,255,0.78);
   --surface-2:     rgba(255,255,255,0.55);
@@ -134,8 +186,7 @@
                  linear-gradient(180deg, #E7E9F1, #DCE0EC);
 }
 
-.tenant-v2 /* -------- Tokens (Cyber — neon dark by default) -------- */
-[data-theme="light"][data-style="cyber"], .tenant-v2 [data-theme="dark"][data-style="cyber"] {
+.tenant-v2 [data-theme="light"][data-style^="cyber"], .tenant-v2 [data-theme="dark"][data-style^="cyber"] {
   --bg:            #050513;
   --surface:       rgba(14, 14, 32, 0.72);
   --surface-2:     rgba(20, 20, 40, 0.55);
@@ -149,9 +200,9 @@
   --text-3:        #8B8BB8;
   --text-4:        #5C5C82;
 
-  --accent:        #00F0FF;          /* electric cyan */
-  --accent-2:      #FF2EC4;          /* hot magenta */
-  --accent-3:      #B14BFF;          /* violet */
+  --accent:        #00F0FF;          
+  --accent-2:      #FF2EC4;          
+  --accent-3:      #B14BFF;          
   --accent-tint:   rgba(0, 240, 255, 0.18);
   --accent-strong: #62F5FF;
   --on-accent:     #03021A;
@@ -175,9 +226,154 @@
     linear-gradient(90deg, rgba(124,92,255,0.05) 1px, transparent 1px) 0 0 / 32px 32px;
 }
 
-.tenant-v2 /* -------- Tokens (Dark, .tenant-v2 Futurist) -------- */
-[data-theme="dark"][data-style="futurist"] {
-  --bg:            #07070B;
+.tenant-v2 [data-theme="light"][data-style="cyber-dark"], .tenant-v2 [data-theme="dark"][data-style="cyber-dark"] {
+  --bg:            #08090C;
+  --surface:       rgba(18, 20, 24, 0.82);
+  --surface-2:     rgba(24, 27, 32, 0.70);
+  --surface-3:     rgba(32, 36, 42, 0.55);
+  --elev:          rgba(120, 200, 220, 0.04);
+  --separator:     rgba(120, 140, 160, 0.16);
+  --hairline:      rgba(120, 140, 160, 0.30);
+
+  --text:          #E4E8EC;
+  --text-2:        #AEB6BE;
+  --text-3:        #79828B;
+  --text-4:        #4E555C;
+
+  --accent:        #2DD4BF;          
+  --accent-2:      #5B8DEF;          
+  --accent-3:      #8B7FD6;          
+  --accent-tint:   rgba(45, 212, 191, 0.12);
+  --accent-strong: #4DE6D2;
+  --on-accent:     #04130F;
+
+  --danger:        #E5687A;
+  --warning:       #D9A441;
+  --success:       #4FC2A8;
+
+  --shadow-1: 0 0 0 1px rgba(120,140,160,0.08), 0 1px 0 rgba(0,0,0,0.6);
+  --shadow-2: 0 0 20px -10px rgba(45,212,191,0.18), 0 8px 28px -8px rgba(0,0,0,0.75);
+  --shadow-3: 0 0 32px -12px rgba(91,141,239,0.18), 0 24px 60px -16px rgba(0,0,0,0.9);
+
+  --cyber-bg:
+    radial-gradient(1100px 760px at 88% -10%, rgba(45,212,191,0.10), transparent 62%),
+    radial-gradient(900px 640px at -8% 110%, rgba(91,141,239,0.10), transparent 62%),
+    linear-gradient(180deg, #08090C, #0B0D11 60%, #060709);
+
+  --cyber-grid:
+    linear-gradient(rgba(120,140,160,0.035) 1px, transparent 1px) 0 0 / 34px 34px,
+    linear-gradient(90deg, rgba(120,140,160,0.035) 1px, transparent 1px) 0 0 / 34px 34px;
+}
+
+.tenant-v2 [data-theme="light"][data-style="cyber-light"], .tenant-v2 [data-theme="dark"][data-style="cyber-light"] {
+  --bg:            #F4F1FF;
+  --surface:       rgba(255, 255, 255, 0.82);
+  --surface-2:     rgba(247, 244, 255, 0.78);
+  --surface-3:     rgba(238, 233, 252, 0.70);
+  --elev:          rgba(120, 80, 255, 0.05);
+  --separator:     rgba(124, 92, 255, 0.18);
+  --hairline:      rgba(124, 92, 255, 0.34);
+
+  --text:          #1B1340;
+  --text-2:        #43356F;
+  --text-3:        #7C6CA8;
+  --text-4:        #ADA0CE;
+
+  --accent:        #7C3AED;          
+  --accent-2:      #FF5CA8;          
+  --accent-3:      #00B8D4;          
+  --accent-tint:   rgba(124, 58, 237, 0.12);
+  --accent-strong: #6022D0;
+  --on-accent:     #FFFFFF;
+
+  --danger:        #F43F6B;
+  --warning:       #E08600;
+  --success:       #15B886;
+
+  --shadow-1: 0 0 0 1px rgba(124,92,255,0.08), 0 1px 2px rgba(124,92,255,0.10);
+  --shadow-2: 0 8px 28px -10px rgba(124,58,237,0.28), 0 2px 8px rgba(255,92,168,0.10);
+  --shadow-3: 0 24px 60px -16px rgba(124,58,237,0.30), 0 0 40px -12px rgba(255,92,168,0.22);
+
+  --cyber-bg:
+    radial-gradient(1200px 800px at 85% -8%, rgba(255,92,168,0.20), transparent 60%),
+    radial-gradient(1000px 700px at -8% 110%, rgba(0,184,212,0.18), transparent 60%),
+    radial-gradient(700px 500px at 50% 50%, rgba(124,58,237,0.10), transparent 70%),
+    linear-gradient(180deg, #F7F4FF, #F0EBFF 60%, #FBF4FF);
+
+  --cyber-grid:
+    linear-gradient(rgba(124,92,255,0.06) 1px, transparent 1px) 0 0 / 32px 32px,
+    linear-gradient(90deg, rgba(124,92,255,0.06) 1px, transparent 1px) 0 0 / 32px 32px;
+}
+
+.tenant-v2 [data-style="cyber-light"] .btn-primary {
+  background: linear-gradient(135deg, #7C3AED, #FF5CA8 60%, #00B8D4);
+  color: #fff;
+  box-shadow: 0 0 0 1px rgba(124,58,237,0.20), 0 8px 24px -6px rgba(124,58,237,0.40);
+}
+
+.tenant-v2 [data-style="cyber-light"] .btn-primary:hover {
+  box-shadow: 0 0 0 1px rgba(255,92,168,0.40), 0 12px 32px -6px rgba(255,92,168,0.50);
+}
+
+.tenant-v2 [data-style="cyber-light"] .sb-logo {
+  background: linear-gradient(135deg, #7C3AED, #FF5CA8);
+  color: #fff;
+  box-shadow: 0 0 18px rgba(124,58,237,0.35);
+}
+
+.tenant-v2 [data-style="cyber-light"] .av {
+  background: linear-gradient(135deg, #7C3AED, #FF5CA8, #00B8D4);
+  box-shadow: 0 0 0 1px rgba(124,58,237,0.20);
+}
+
+.tenant-v2 [data-style="cyber-light"] .page-title em {
+  background: linear-gradient(120deg, #7C3AED 0%, #FF5CA8 55%, #00B8D4 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.tenant-v2 [data-style="cyber-light"] body { color: var(--text); }
+
+.tenant-v2 [data-style="cyber-dark"] .btn-primary {
+  background: linear-gradient(135deg, #2DD4BF, #5B8DEF);
+  color: #04130F;
+  box-shadow: 0 0 0 1px rgba(45,212,191,0.20), 0 8px 24px -8px rgba(45,212,191,0.30);
+}
+
+.tenant-v2 [data-style="cyber-dark"] .btn-primary:hover {
+  box-shadow: 0 0 0 1px rgba(91,141,239,0.30), 0 12px 32px -8px rgba(91,141,239,0.35);
+}
+
+.tenant-v2 [data-style="cyber-dark"] .sb-logo {
+  background: linear-gradient(135deg, #2DD4BF, #5B8DEF);
+  color: #04130F;
+  box-shadow: 0 0 14px rgba(45,212,191,0.30);
+}
+
+.tenant-v2 [data-style="cyber-dark"] .av {
+  background: linear-gradient(135deg, #2DD4BF, #5B8DEF);
+  box-shadow: 0 0 0 1px rgba(45,212,191,0.18);
+}
+
+.tenant-v2 [data-style="cyber-dark"] .page-title em {
+  background: linear-gradient(120deg, #2DD4BF 0%, #5B8DEF 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.tenant-v2 [data-style="cyber-dark"] .sb-link.is-active::before {
+  background: linear-gradient(180deg, #2DD4BF, #5B8DEF);
+  box-shadow: 0 0 10px rgba(45,212,191,0.45);
+}
+
+.tenant-v2 [data-style="cyber-dark"] .card:hover, .tenant-v2 [data-style="cyber-dark"] .kpi:hover {
+  border-color: rgba(45,212,191,0.30);
+  box-shadow: 0 0 28px -12px rgba(45,212,191,0.25), 0 0 0 1px rgba(45,212,191,0.14);
+}
+
+.tenant-v2 [data-theme="dark"][data-style="futurist"] {
   --surface:       rgba(28,28,40,0.65);
   --surface-2:     rgba(28,28,40,0.45);
   --surface-3:     rgba(28,28,40,0.30);
@@ -209,10 +405,7 @@
                  linear-gradient(180deg, #07070B, #0A0A12);
 }
 
-.tenant-v2 /* ============================================================
-   Base
-   ============================================================ */
-* { box-sizing: border-box; }
+.tenant-v2 * { box-sizing: border-box; }
 
 .tenant-v2, .tenant-v2 { margin: 0; padding: 0; }
 
@@ -229,13 +422,13 @@
 
 .tenant-v2 [data-style="futurist"] body { background: var(--futurist-bg); background-attachment: fixed; }
 
-.tenant-v2 [data-style="cyber"] body {
+.tenant-v2 [data-style^="cyber"] body {
   background: var(--cyber-bg);
   background-attachment: fixed;
   color: var(--text);
 }
 
-.tenant-v2 [data-style="cyber"] body::before {
+.tenant-v2 [data-style^="cyber"] body::before {
   content: '';
   position: fixed; inset: 0;
   background: var(--cyber-grid);
@@ -245,7 +438,7 @@
   -webkit-mask-image: radial-gradient(ellipse at center, rgba(0,0,0,0.7), transparent 80%);
 }
 
-.tenant-v2 [data-style="cyber"] .app, .tenant-v2 [data-style="cyber"] main { position: relative; z-index: 1; }
+.tenant-v2 [data-style^="cyber"] .app, .tenant-v2 [data-style^="cyber"] main { position: relative; z-index: 1; }
 
 .tenant-v2 button, .tenant-v2 input, .tenant-v2 textarea, .tenant-v2 select {
   font: inherit; color: inherit;
@@ -264,11 +457,9 @@
 
 .tenant-v2 ::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
 
-.tenant-v2 /* Selection */
-::selection { background: var(--accent-tint); color: var(--text); }
+.tenant-v2 ::selection { background: var(--accent-tint); color: var(--text); }
 
-.tenant-v2 /* Display type — using same Geist family as page titles (no serif anywhere) */
-.display-serif {
+.tenant-v2 .display-serif {
   font-family: 'Geist', -apple-system, system-ui, sans-serif;
   font-weight: 700;
   letter-spacing: -0.022em;
@@ -286,12 +477,9 @@
 
 .tenant-v2 .mono { font-family: 'Geist Mono', ui-monospace, SFMono-Regular, monospace; font-feature-settings: 'tnum'; }
 
-.tenant-v2 [data-style="cyber"] .mono { font-family: 'JetBrains Mono', 'Geist Mono', monospace; }
+.tenant-v2 [data-style^="cyber"] .mono { font-family: 'JetBrains Mono', 'Geist Mono', monospace; }
 
-.tenant-v2 /* ============================================================
-   App shell
-   ============================================================ */
-.app {
+.tenant-v2 .app {
   display: grid;
   grid-template-columns: var(--sb-w) 1fr;
   min-height: 100vh;
@@ -304,10 +492,7 @@
 
 .tenant-v2 .app[data-sb="hidden"] { --sb-w: 0px; }
 
-.tenant-v2 /* ============================================================
-   Sidebar
-   ============================================================ */
-.sb {
+.tenant-v2 .sb {
   position: sticky; top: 0; height: 100vh;
   background: var(--surface);
   border-right: 1px solid var(--separator);
@@ -445,10 +630,7 @@
 
 .tenant-v2 [data-sb="icons"] .sb-user { justify-content: center; padding: 6px 0; }
 
-.tenant-v2 /* ============================================================
-   Topbar
-   ============================================================ */
-.tb {
+.tenant-v2 .tb {
   height: 56px;
   display: flex; align-items: center; gap: 16px;
   padding: 0 24px;
@@ -504,10 +686,7 @@
 
 .tenant-v2 .icon-btn svg { width: 17px; height: 17px; stroke-width: 1.8; }
 
-.tenant-v2 /* ============================================================
-   Content area
-   ============================================================ */
-.content {
+.tenant-v2 .content {
   padding: calc(28px * var(--density)) calc(32px * var(--density)) calc(40px * var(--density));
   max-width: 1280px;
   margin: 0 auto;
@@ -550,12 +729,12 @@
   -webkit-text-fill-color: transparent;
 }
 
-.tenant-v2 [data-style="cyber"] .page-title {
+.tenant-v2 [data-style^="cyber"] .page-title {
   font-weight: 700;
   letter-spacing: -0.035em;
 }
 
-.tenant-v2 [data-style="cyber"] .page-title em {
+.tenant-v2 [data-style^="cyber"] .page-title em {
   background: linear-gradient(120deg, #00F0FF 0%, #B14BFF 50%, #FF2EC4 100%);
   -webkit-background-clip: text;
   background-clip: text;
@@ -565,10 +744,7 @@
 
 .tenant-v2 .page-sub { margin: 10px 0 0; color: var(--text-3); font-size: 14px; max-width: 56ch; line-height: 1.55; }
 
-.tenant-v2 /* ============================================================
-   Buttons
-   ============================================================ */
-.btn {
+.tenant-v2 .btn {
   display: inline-flex; align-items: center; gap: 7px;
   padding: 0 14px; height: 34px;
   border-radius: 999px;
@@ -598,10 +774,7 @@
 
 .tenant-v2 .btn-lg { height: 42px; font-size: 14px; padding: 0 18px; }
 
-.tenant-v2 /* ============================================================
-   Card / list patterns (iOS Settings-like)
-   ============================================================ */
-.card {
+.tenant-v2 .card {
   background: var(--surface);
   border: 1px solid var(--separator);
   border-radius: var(--radius-lg);
@@ -632,8 +805,7 @@
 
 .tenant-v2 .card-pad-0 { padding: 0; }
 
-.tenant-v2 /* Inset list — Apple Settings */
-.list { background: var(--surface); border-radius: var(--radius-lg); border: 1px solid var(--separator); overflow: hidden; }
+.tenant-v2 .list { background: var(--surface); border-radius: var(--radius-lg); border: 1px solid var(--separator); overflow: hidden; }
 
 .tenant-v2 .list-row {
   display: flex; align-items: center; gap: 12px;
@@ -662,10 +834,7 @@
 
 .tenant-v2 .list-chev svg { width: 13px; height: 13px; stroke-width: 2.4; }
 
-.tenant-v2 /* ============================================================
-   Badges, .tenant-v2 chips, .tenant-v2 pills
-   ============================================================ */
-.chip {
+.tenant-v2 .chip {
   display: inline-flex; align-items: center; gap: 5px;
   height: 22px; padding: 0 9px;
   border-radius: 999px;
@@ -691,10 +860,7 @@
 
 .tenant-v2 .chip.t-accent { color: var(--accent); background: var(--accent-tint); border-color: transparent; }
 
-.tenant-v2 /* ============================================================
-   Inputs
-   ============================================================ */
-.input {
+.tenant-v2 .input {
   height: 38px;
   padding: 0 12px;
   border-radius: var(--radius-sm);
@@ -710,10 +876,7 @@
 
 .tenant-v2 .input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
 
-.tenant-v2 /* ============================================================
-   Grid utilities
-   ============================================================ */
-.grid { display: grid; gap: var(--gap); }
+.tenant-v2 .grid { display: grid; gap: var(--gap); }
 
 .tenant-v2 .grid-12 { grid-template-columns: repeat(12, minmax(0,1fr)); }
 
@@ -731,10 +894,7 @@
 
 .tenant-v2 .col-12 { grid-column: span 12; }
 
-.tenant-v2 /* ============================================================
-   Stats row / KPIs (numeric, .tenant-v2 editorial)
-   ============================================================ */
-.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap); }
+.tenant-v2 .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap); }
 
 .tenant-v2 .kpi {
   background: var(--surface);
@@ -769,10 +929,7 @@
 
 .tenant-v2 .kpi-delta.down { color: var(--danger); }
 
-.tenant-v2 /* ============================================================
-   Mini calendar
-   ============================================================ */
-.mini-cal { padding: 14px 16px; }
+.tenant-v2 .mini-cal { padding: 14px 16px; }
 
 .tenant-v2 .mini-cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 
@@ -804,10 +961,7 @@
 
 .tenant-v2 .mini-cal-day.is-selected { background: var(--text); color: var(--surface); }
 
-.tenant-v2 /* ============================================================
-   Avatars
-   ============================================================ */
-.av {
+.tenant-v2 .av {
   width: 28px; height: 28px; border-radius: 50%;
   display: grid; place-items: center;
   font-size: 11px; font-weight: 600; letter-spacing: -0.01em;
@@ -826,8 +980,7 @@
 
 .tenant-v2 .av-stack .av:first-child { margin-left: 0; }
 
-.tenant-v2 /* Color seed avatars */
-.av[data-c="1"] { background: linear-gradient(135deg, #FF9F0A, #FF453A); }
+.tenant-v2 .av[data-c="1"] { background: linear-gradient(135deg, #FF9F0A, #FF453A); }
 
 .tenant-v2 .av[data-c="2"] { background: linear-gradient(135deg, #30D158, #34C8E8); }
 
@@ -841,10 +994,7 @@
 
 .tenant-v2 .av[data-c="7"] { background: linear-gradient(135deg, #FFD60A, #FF9F0A); }
 
-.tenant-v2 /* ============================================================
-   Segmented control (iOS)
-   ============================================================ */
-.seg {
+.tenant-v2 .seg {
   display: inline-flex;
   padding: 3px;
   background: var(--surface-3);
@@ -866,10 +1016,7 @@
   box-shadow: 0 1px 2px rgba(0,0,0,0.08);
 }
 
-.tenant-v2 /* ============================================================
-   Tables (compact)
-   ============================================================ */
-.tbl { width: 100%; border-collapse: collapse; }
+.tenant-v2 .tbl { width: 100%; border-collapse: collapse; }
 
 .tenant-v2 .tbl thead th {
   text-align: left; padding: 8px 16px;
@@ -894,15 +1041,17 @@
 
 .tenant-v2 .tbl .num { font-family: 'Geist Mono', monospace; font-size: 12px; color: var(--text-2); }
 
-.tenant-v2 /* ============================================================
-   Animations
-   ============================================================ */
 @keyframes rise-in {
   from { transform: translateY(10px); opacity: 0; }
   to   { transform: translateY(0); opacity: 1; }
 }
 
 @keyframes fade-in { from { opacity: 0.001; } to { opacity: 1; } }
+
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
 
 @keyframes shimmer {
   0%   { background-position: -200% 0; }
@@ -938,11 +1087,9 @@
 
 .tenant-v2 .rise-d5 { animation-delay: 300ms; }
 
-.tenant-v2 /* Page transition wrapper */
-.route-enter { animation: route-in 420ms cubic-bezier(.2,.7,.2,1) both; }
+.tenant-v2 .route-enter { animation: route-in 420ms cubic-bezier(.2,.7,.2,1) both; }
 
-.tenant-v2 /* Micro-interactions */
-.lift { transition: transform 220ms cubic-bezier(.2,.7,.2,1), box-shadow 220ms; }
+.tenant-v2 .lift { transition: transform 220ms cubic-bezier(.2,.7,.2,1), box-shadow 220ms; }
 
 .tenant-v2 .lift:hover { transform: translateY(-2px); box-shadow: var(--shadow-3); }
 
@@ -972,96 +1119,158 @@
 
 .tenant-v2 .btn-primary:hover::after { transform: translateX(110%); }
 
-.tenant-v2 /* Cyber style — neon accents */
-[data-style="cyber"] .btn-primary {
+.tenant-v2 [data-style^="cyber"] .btn-primary {
   background: linear-gradient(135deg, #00F0FF, #B14BFF 55%, #FF2EC4);
   color: #03021A;
   box-shadow: 0 0 0 1px rgba(0,240,255,0.25), 0 8px 24px -6px rgba(0,240,255,0.40);
 }
 
-.tenant-v2 [data-style="cyber"] .btn-primary:hover {
+.tenant-v2 [data-style^="cyber"] .btn-primary:hover {
   box-shadow: 0 0 0 1px rgba(255,46,196,0.45), 0 12px 32px -6px rgba(255,46,196,0.55);
 }
 
-.tenant-v2 [data-style="cyber"] .btn-secondary {
+.tenant-v2 [data-style^="cyber"] .btn-secondary {
   background: rgba(255,255,255,0.04);
   border-color: rgba(124,92,255,0.32);
   color: var(--text);
 }
 
-.tenant-v2 [data-style="cyber"] .btn-secondary:hover {
+.tenant-v2 [data-style^="cyber"] .btn-secondary:hover {
   background: rgba(0,240,255,0.08);
   border-color: rgba(0,240,255,0.40);
 }
 
-.tenant-v2 [data-style="cyber"] .chip.t-success { color: var(--success); background: rgba(76,255,176,0.12); }
+.tenant-v2 [data-style^="cyber"] .chip.t-success { color: var(--success); background: rgba(76,255,176,0.12); }
 
-.tenant-v2 [data-style="cyber"] .chip.t-warn { color: var(--warning); background: rgba(255,182,39,0.14); }
+.tenant-v2 [data-style^="cyber"] .chip.t-warn { color: var(--warning); background: rgba(255,182,39,0.14); }
 
-.tenant-v2 [data-style="cyber"] .chip.t-info { color: var(--accent-3); background: rgba(177,75,255,0.16); }
+.tenant-v2 [data-style^="cyber"] .chip.t-info { color: var(--accent-3); background: rgba(177,75,255,0.16); }
 
-.tenant-v2 [data-style="cyber"] .chip.t-accent { color: var(--accent); background: rgba(0,240,255,0.14); }
+.tenant-v2 [data-style^="cyber"] .chip.t-accent { color: var(--accent); background: rgba(0,240,255,0.14); }
 
-.tenant-v2 [data-style="cyber"] .card, .tenant-v2 [data-style="cyber"] .list, .tenant-v2 [data-style="cyber"] .kpi {
+.tenant-v2 [data-style^="cyber"] .card, .tenant-v2 [data-style^="cyber"] .list, .tenant-v2 [data-style^="cyber"] .kpi {
   background: linear-gradient(180deg, rgba(20,20,40,0.55), rgba(14,14,32,0.45));
   backdrop-filter: blur(24px) saturate(140%);
   -webkit-backdrop-filter: blur(24px) saturate(140%);
   border-color: var(--separator);
 }
 
-.tenant-v2 [data-style="cyber"] .card:hover, .tenant-v2 [data-style="cyber"] .kpi:hover {
+.tenant-v2 [data-style^="cyber"] .card:hover, .tenant-v2 [data-style^="cyber"] .kpi:hover {
   border-color: rgba(0,240,255,0.35);
   box-shadow: 0 0 32px -10px rgba(0,240,255,0.30), 0 0 0 1px rgba(0,240,255,0.18);
 }
 
-.tenant-v2 [data-style="cyber"] .kpi-num em { color: var(--accent-3); }
+.tenant-v2 [data-style^="cyber"] .kpi-num em { color: var(--accent-3); }
 
-.tenant-v2 [data-style="cyber"] .sb {
+.tenant-v2 [data-style^="cyber"] .sb {
   background: linear-gradient(180deg, rgba(8,8,22,0.92), rgba(5,5,19,0.96));
   border-right-color: var(--separator);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
 }
 
-.tenant-v2 [data-style="cyber"] .sb-logo {
+.tenant-v2 [data-style^="cyber"] .sb-logo {
   background: linear-gradient(135deg, #00F0FF, #FF2EC4);
   color: #03021A;
   box-shadow: 0 0 18px rgba(0,240,255,0.45);
 }
 
-.tenant-v2 [data-style="cyber"] .sb-link.is-active {
+.tenant-v2 [data-style^="cyber"] .sb-link.is-active {
   background: linear-gradient(90deg, rgba(0,240,255,0.18), rgba(255,46,196,0.10) 80%, transparent);
   color: var(--text);
 }
 
-.tenant-v2 [data-style="cyber"] .sb-link.is-active::before {
+.tenant-v2 [data-style^="cyber"] .sb-link.is-active::before {
   background: linear-gradient(180deg, #00F0FF, #FF2EC4);
   box-shadow: 0 0 12px rgba(0,240,255,0.6);
   width: 3px;
 }
 
-.tenant-v2 [data-style="cyber"] .tb {
+.tenant-v2 [data-style^="cyber"] .tb {
   background: linear-gradient(180deg, rgba(8,8,22,0.85), rgba(8,8,22,0.55));
   border-bottom-color: var(--separator);
 }
 
-.tenant-v2 [data-style="cyber"] .av {
+.tenant-v2 [data-style^="cyber"] .av {
   background: linear-gradient(135deg, #00F0FF, #B14BFF, #FF2EC4);
   box-shadow: 0 0 0 1px rgba(0,240,255,0.25);
 }
 
-.tenant-v2 [data-style="cyber"] .seg { background: rgba(255,255,255,0.04); border: 1px solid var(--separator); }
+.tenant-v2 [data-style^="cyber"] .seg { background: rgba(255,255,255,0.04); border: 1px solid var(--separator); }
 
-.tenant-v2 [data-style="cyber"] .seg-btn.is-active {
+.tenant-v2 [data-style^="cyber"] .seg-btn.is-active {
   background: linear-gradient(135deg, rgba(0,240,255,0.18), rgba(255,46,196,0.18));
   color: var(--text);
   box-shadow: 0 0 0 1px rgba(0,240,255,0.30);
 }
 
-.tenant-v2 /* ============================================================
-   iPhone column
-   ============================================================ */
-.phone-col {
+.tenant-v2 [data-style="cyber-light"] .card, .tenant-v2 [data-style="cyber-light"] .list, .tenant-v2 [data-style="cyber-light"] .kpi {
+  background: linear-gradient(180deg, rgba(255,255,255,0.86), rgba(247,244,255,0.74));
+  border-color: var(--separator);
+}
+
+.tenant-v2 [data-style="cyber-light"] .card:hover, .tenant-v2 [data-style="cyber-light"] .kpi:hover {
+  border-color: rgba(124,58,237,0.35);
+  box-shadow: 0 0 32px -12px rgba(124,58,237,0.28), 0 0 0 1px rgba(124,58,237,0.16);
+}
+
+.tenant-v2 [data-style="cyber-light"] .kpi-num em { color: var(--accent-2); }
+
+.tenant-v2 [data-style="cyber-light"] .sb {
+  background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(244,241,255,0.94));
+  border-right-color: var(--separator);
+}
+
+.tenant-v2 [data-style="cyber-light"] .tb {
+  background: linear-gradient(180deg, rgba(255,255,255,0.85), rgba(255,255,255,0.55));
+  border-bottom-color: var(--separator);
+}
+
+.tenant-v2 [data-style="cyber-light"] .sb-link.is-active {
+  background: linear-gradient(90deg, rgba(124,58,237,0.14), rgba(255,92,168,0.08) 80%, transparent);
+  color: var(--text);
+}
+
+.tenant-v2 [data-style="cyber-light"] .sb-link.is-active::before {
+  background: linear-gradient(180deg, #7C3AED, #FF5CA8);
+  box-shadow: 0 0 10px rgba(124,58,237,0.4);
+}
+
+.tenant-v2 [data-style="cyber-light"] .seg { background: rgba(124,92,255,0.06); }
+
+.tenant-v2 [data-style="cyber-light"] .seg-btn.is-active {
+  background: linear-gradient(135deg, rgba(124,58,237,0.16), rgba(255,92,168,0.16));
+  color: var(--text);
+  box-shadow: 0 0 0 1px rgba(124,58,237,0.28);
+}
+
+.tenant-v2 [data-style="cyber-dark"] .card, .tenant-v2 [data-style="cyber-dark"] .list, .tenant-v2 [data-style="cyber-dark"] .kpi {
+  background: linear-gradient(180deg, rgba(24,27,32,0.78), rgba(18,20,24,0.66));
+  border-color: var(--separator);
+}
+
+.tenant-v2 [data-style="cyber-dark"] .sb {
+  background: linear-gradient(180deg, rgba(11,13,17,0.94), rgba(8,9,12,0.96));
+}
+
+.tenant-v2 [data-style="cyber-dark"] .tb {
+  background: linear-gradient(180deg, rgba(11,13,17,0.85), rgba(11,13,17,0.55));
+}
+
+.tenant-v2 [data-style="cyber-dark"] .sb-link.is-active {
+  background: linear-gradient(90deg, rgba(45,212,191,0.14), rgba(91,141,239,0.06) 80%, transparent);
+  color: var(--text);
+}
+
+.tenant-v2 [data-style="cyber-dark"] .seg-btn.is-active {
+  background: linear-gradient(135deg, rgba(45,212,191,0.16), rgba(91,141,239,0.16));
+  color: var(--text);
+  box-shadow: 0 0 0 1px rgba(45,212,191,0.26);
+}
+
+.tenant-v2 [data-style="cyber-dark"] .kpi-num em { color: var(--accent); }
+
+.tenant-v2 .phone-col {
   position: sticky; top: 24px;
   align-self: start;
   padding: 0;
@@ -1074,8 +1283,7 @@
   color: var(--text-3);
 }
 
-.tenant-v2 /* iOS surfaces inside the device frame use our tokens */
-.ios-list-row {
+.tenant-v2 .ios-list-row {
   display: flex; align-items: center; gap: 12px;
   padding: 11px 16px;
   background: var(--ios-surface, #fff);
@@ -1091,10 +1299,7 @@
   overflow: hidden;
 }
 
-.tenant-v2 /* ============================================================
-   Small helpers
-   ============================================================ */
-.row { display: flex; align-items: center; gap: 8px; }
+.tenant-v2 .row { display: flex; align-items: center; gap: 8px; }
 
 .tenant-v2 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 
@@ -1104,12 +1309,7 @@
 
 .tenant-v2 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: inline-block; flex-shrink: 0; }
 
-.tenant-v2 /* ============================================================
-   Joyful additions — warm, .tenant-v2 friendly, .tenant-v2 animated
-   ============================================================ */
-
-/* Apple-style bright accent map */
-.tone-blue { --tone: #0A84FF; --tone-tint: rgba(10,132,255,0.10); }
+.tenant-v2 .tone-blue { --tone: #0A84FF; --tone-tint: rgba(10,132,255,0.10); }
 
 .tenant-v2 .tone-green { --tone: #34C759; --tone-tint: rgba(52,199,89,0.12); }
 
@@ -1121,8 +1321,7 @@
 
 .tenant-v2 .tone-teal { --tone: #5AC8FA; --tone-tint: rgba(90,200,250,0.14); }
 
-.tenant-v2 /* Legacy aliases */
-.tone-coral { --tone: #FF9500; --tone-tint: rgba(255,149,0,0.12); }
+.tenant-v2 .tone-coral { --tone: #FF9500; --tone-tint: rgba(255,149,0,0.12); }
 
 .tenant-v2 .tone-yellow { --tone: #FF9500; --tone-tint: rgba(255,149,0,0.12); }
 
@@ -1151,8 +1350,7 @@
 
 .tenant-v2 .pill-tone .chip-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
-.tenant-v2 /* Big colorful service type "ribbon" header for service cards */
-.svc-ribbon {
+.tenant-v2 .svc-ribbon {
   height: 88px;
   position: relative;
   overflow: hidden;
@@ -1194,8 +1392,7 @@
   font-weight: 500;
 }
 
-.tenant-v2 /* Request card — pending invitations */
-.req-card {
+.tenant-v2 .req-card {
   background: var(--surface);
   border: 1px solid var(--separator);
   border-radius: var(--radius-lg);
@@ -1219,8 +1416,7 @@
   pointer-events: none;
 }
 
-.tenant-v2 /* Photo avatar with subtle ring */
-.av-photo {
+.tenant-v2 .av-photo {
   width: 44px; height: 44px; border-radius: 50%;
   background-size: cover; background-position: center;
   position: relative; flex-shrink: 0;
@@ -1231,8 +1427,7 @@
 
 .tenant-v2 .av-photo.sm { width: 32px; height: 32px; }
 
-.tenant-v2 /* Service instance row inside type card */
-.svc-instance {
+.tenant-v2 .svc-instance {
   display: flex; align-items: center; gap: 14px;
   padding: 12px 18px;
   border-top: 1px solid var(--separator);
@@ -1262,8 +1457,7 @@
   margin-top: 2px; font-feature-settings: 'tnum';
 }
 
-.tenant-v2 /* Side panel / detail drawer */
-.drawer-backdrop {
+.tenant-v2 .drawer-backdrop {
   position: fixed; inset: 0; z-index: 300;
   background: color-mix(in oklab, var(--text) 35%, transparent);
   backdrop-filter: blur(4px);
@@ -1301,7 +1495,6 @@
   background: var(--surface-2);
 }
 
-.tenant-v2 /* Bounce animation for confirm CTAs */
 @keyframes bounce-soft {
   0%, 100% { transform: translateY(0); }
   40%      { transform: translateY(-3px); }
@@ -1310,7 +1503,6 @@
 
 .tenant-v2 .btn.bounce-on-hover:hover { animation: bounce-soft 600ms ease both; }
 
-.tenant-v2 /* Wiggly dot — for friendly attention */
 @keyframes wobble {
   0%, 100% { transform: rotate(0); }
   25% { transform: rotate(-8deg); }
@@ -1319,14 +1511,12 @@
 
 .tenant-v2 .wobble { animation: wobble 1600ms ease-in-out infinite; transform-origin: center; }
 
-.tenant-v2 /* Soft confetti dots (decorative) */
-.confetti {
+.tenant-v2 .confetti {
   position: absolute; pointer-events: none;
   width: 6px; height: 6px; border-radius: 50%;
 }
 
-.tenant-v2 /* Colorful tile (used in upcoming strip) */
-.day-tile {
+.tenant-v2 .day-tile {
   position: relative;
   display: flex; flex-direction: column; gap: 6px;
   min-width: 116px; flex-shrink: 0;
@@ -1378,8 +1568,7 @@
   box-shadow: 0 0 0 4px color-mix(in oklab, var(--tone, var(--accent)) 18%, transparent);
 }
 
-.tenant-v2 /* Page title gets a little glyph next to em */
-.title-glyph {
+.tenant-v2 .title-glyph {
   display: inline-block;
   width: 0.5em; height: 0.5em; border-radius: 50%;
   background: var(--accent-3);
@@ -1387,8 +1576,7 @@
   vertical-align: middle;
 }
 
-.tenant-v2 /* Update active sidebar look — pill shaped */
-.sb-link.is-active {
+.tenant-v2 .sb-link.is-active {
   background: linear-gradient(90deg, var(--accent-tint), transparent 90%);
   color: var(--text);
 }
@@ -1398,8 +1586,7 @@
   box-shadow: 0 0 10px var(--accent);
 }
 
-.tenant-v2 /* Animated mini sparkle ring for KPI hover */
-.kpi {
+.tenant-v2 .kpi {
   position: relative;
 }
 
@@ -1411,7 +1598,6 @@
   opacity: 0.7;
 }
 
-.tenant-v2 /* Smaller animated check pulse */
 @keyframes check-pop {
   0% { transform: scale(0.6); opacity: 0; }
   60% { transform: scale(1.15); opacity: 1; }
@@ -1419,3 +1605,91 @@
 }
 
 .tenant-v2 .check-pop { animation: check-pop 360ms cubic-bezier(.4,1.6,.5,1) both; }
+
+.tenant-v2 tr.is-expanded > td { background: var(--surface-2); }
+
+.tenant-v2 .arr-drawer-row td { border-bottom: 1px solid var(--separator); }
+
+.tenant-v2 .arr-drawer {
+  animation: arr-slide 280ms cubic-bezier(.2,.7,.2,1) both;
+  padding: 6px 0 10px;
+}
+
+@keyframes arr-slide {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.tenant-v2 .arr-row {
+  display: flex; align-items: center; gap: 16px;
+  padding: 11px 18px 11px 30px;
+  cursor: pointer;
+  transition: background 140ms;
+}
+
+.tenant-v2 .arr-row:hover { background: var(--surface); }
+
+.tenant-v2 .arr-rail {
+  width: 2px; height: 26px; border-radius: 2px; flex-shrink: 0;
+  background: var(--accent); opacity: 0.45;
+}
+
+.tenant-v2 .arr-stat {
+  font-size: 12px; color: var(--text-3);
+  font-family: 'Geist Mono', monospace;
+  white-space: nowrap;
+}
+
+.tenant-v2 .arr-stat b { color: var(--text); font-weight: 700; }
+
+.tenant-v2 .arr-file {
+  width: 26px; height: 26px; border-radius: 7px;
+  display: grid; place-items: center;
+  background: var(--surface-3); color: var(--text-2);
+  border: 1px solid var(--separator);
+}
+
+.tenant-v2 .arr-add {
+  display: flex; align-items: center; gap: 7px;
+  margin: 4px 18px 0 44px;
+  padding: 9px 12px; width: calc(100% - 62px);
+  border: 1px dashed var(--hairline); border-radius: 10px;
+  background: transparent; color: var(--text-2);
+  font-size: 12.5px; font-weight: 600; cursor: pointer;
+  transition: border-color 160ms, color 160ms, background 160ms;
+}
+
+.tenant-v2 .arr-add:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-tint); }
+
+.tenant-v2 .lyric-slide {
+  position: relative;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-md);
+  background: linear-gradient(160deg, #15171C, #0C0D11);
+  color: #fff;
+  aspect-ratio: 16 / 9;
+  padding: 22px 24px;
+  display: flex; flex-direction: column; justify-content: center;
+  overflow: hidden;
+  transition: transform 220ms cubic-bezier(.2,.7,.2,1), box-shadow 220ms;
+}
+
+.tenant-v2 .lyric-slide:hover { transform: translateY(-3px); box-shadow: var(--shadow-3); }
+
+.tenant-v2 .lyric-slide-label {
+  position: absolute; top: 12px; left: 16px;
+  font-family: 'Geist Mono', monospace; font-size: 9.5px;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  color: rgba(255,255,255,0.5); font-weight: 600;
+}
+
+.tenant-v2 .lyric-slide-num {
+  position: absolute; top: 12px; right: 16px;
+  font-family: 'Geist Mono', monospace; font-size: 10px;
+  color: rgba(255,255,255,0.4);
+}
+
+.tenant-v2 .lyric-slide-line {
+  font-size: 17px; font-weight: 600; line-height: 1.45;
+  letter-spacing: -0.01em; text-wrap: balance;
+}
