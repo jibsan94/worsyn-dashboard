@@ -72,7 +72,7 @@ interface ServiceType {
   times: ServiceTime[]
   team_ids: string[]
 }
-interface ServicePlan { id: string; title: string; status: string; scheduled_at: string | null; service_type_id: string | null }
+interface ServicePlan { id: string; title: string; status: string; scheduled_at: string | null; service_type_id: string | null; updated_at?: string | null; created_at?: string | null }
 interface Team {
   id: string
   name: string
@@ -543,101 +543,126 @@ function MasterCalendarModal({ occurrences, onClose }: { occurrences: Occurrence
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ServiceTypeCard — collapsible card per service in ListView
+// ServiceTypeCard — PCO-style collapsible card per service in ListView
+// Service-type recurrence/times are *defaults only* — never auto-generated.
+// The card lists only real ServicePlan rows belonging to this type.
 // ─────────────────────────────────────────────────────────────────────────────
-function ServiceTypeCard({ type, plans, occurrences, onDelete, onAddPlan }: {
+function fmtRelative(iso: string | null | undefined, fallback = '—'): string {
+  if (!iso) return fallback
+  const d = new Date(iso)
+  const diff = (Date.now() - d.getTime()) / 1000
+  if (diff < 60) return 'hace segundos'
+  if (diff < 3600) return `hace ${Math.floor(diff/60)} min`
+  if (diff < 86400) return `hace ${Math.floor(diff/3600)} h`
+  if (diff < 86400 * 7) return `hace ${Math.floor(diff/86400)} días`
+  return d.toLocaleDateString('es', { day: '2-digit', month: 'short', year: 'numeric' })
+}
+
+function ServiceTypeCard({ type, plans, onDelete, onAddPlan, onDeletePlan }: {
   type: ServiceType
   plans: ServicePlan[]
-  occurrences: Occurrence[]
   onDelete: () => void
   onAddPlan: () => void
+  onDeletePlan: (plan: ServicePlan) => void
 }) {
   const [open, setOpen] = useState(true)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [filter, setFilter] = useState<'upcoming' | 'past' | 'all'>('upcoming')
+  const menuRef = React.useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!menuOpen) return
+    const fn = (e: MouseEvent) => { if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false) }
+    document.addEventListener('mousedown', fn)
+    return () => document.removeEventListener('mousedown', fn)
+  }, [menuOpen])
   const color = typeColor(type)
-  const next5 = occurrences.filter(o => o.service_type_id === type.id).slice(0, 5)
+  const now = Date.now()
+  const visible = plans.filter(p => {
+    if (filter === 'all') return true
+    if (!p.scheduled_at) return filter === 'past' ? false : true
+    const t = new Date(p.scheduled_at).getTime()
+    return filter === 'upcoming' ? t >= now - 24*3600*1000 : t < now
+  }).sort((a, b) => {
+    const ta = a.scheduled_at ? new Date(a.scheduled_at).getTime() : 0
+    const tb = b.scheduled_at ? new Date(b.scheduled_at).getTime() : 0
+    return filter === 'past' ? tb - ta : ta - tb
+  })
 
   return (
     <div style={s.typeCard}>
       <div style={{ ...s.typeHeader, borderRadius: open ? '10px 10px 0 0' : 10 }} onClick={() => setOpen(o => !o)}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 12, height: 12, borderRadius: 3, background: color, flexShrink: 0 }} />
           <svg viewBox="0 0 20 20" fill="currentColor" width={12} height={12}
             style={{ color: C.muted, transform: open ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform .15s' }}>
             <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
           </svg>
+          <div style={{ width: 10, height: 10, borderRadius: 3, background: color, flexShrink: 0 }} />
           <span style={s.typeName}>{type.name}</span>
-          <span style={{ ...s.pill, background: C.soft, color: C.muted }}>{recurLabel(type.recurrence)}</span>
-          {type.times.length > 0 && (
-            <span style={{ fontSize: 12, color: C.muted }}>
-              {type.times.length === 1
-                ? `${WEEKDAYS[type.times[0].weekday ?? 0]} · ${type.times[0].start_time}–${type.times[0].end_time}`
-                : `${type.times.length} horarios`}
-            </span>
-          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={e => e.stopPropagation()}>
-          <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12 }} onClick={onAddPlan}>+ Plan</button>
-          <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, color: C.danger, borderColor: 'rgba(239,68,68,.3)' }}
-            onClick={() => { if (confirm(`¿Eliminar "${type.name}"?`)) onDelete() }}>Eliminar</button>
+          <button style={{ ...s.btnGhost, padding: '4px 10px', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }} title="Vista">
+            Matriz <span style={{ color: C.muted }}>▾</span>
+          </button>
+          <div style={{ position: 'relative' }} ref={menuRef}>
+            <button style={{ ...s.btnGhost, padding: '4px 8px', fontSize: 12 }} onClick={() => setMenuOpen(o => !o)} title="Opciones">
+              ⚙ <span style={{ color: C.muted }}>▾</span>
+            </button>
+            {menuOpen && (
+              <div style={{ position: 'absolute', right: 0, top: '100%', marginTop: 4, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.12)', zIndex: 30, minWidth: 180 }}>
+                <button onClick={() => { setMenuOpen(false); onAddPlan() }}
+                  style={{ display: 'block', width: '100%', textAlign: 'left' as const, padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: C.text }}>
+                  + Añadir plan
+                </button>
+                <button onClick={() => { setMenuOpen(false); if (confirm(`¿Eliminar el tipo "${type.name}"? Sus planes se borrarán.`)) onDelete() }}
+                  style={{ display: 'block', width: '100%', textAlign: 'left' as const, padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: C.danger }}>
+                  Eliminar tipo
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       {open && (
-        <div style={{ padding: '8px 0' }}>
-          {type.times.length > 0 && (
-            <div style={{ padding: '8px 16px 4px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {type.times.map((t, i) => (
-                <span key={i} style={{ ...s.pill, background: C.primaryLight, color: C.primary }}>
-                  {WEEKDAYS[t.weekday ?? 0]} · {t.start_time}–{t.end_time}
-                </span>
-              ))}
+        <div>
+          {visible.length === 0 ? (
+            <div style={{ padding: '36px 16px', textAlign: 'center' as const }}>
+              <div style={{ fontSize: 13, color: C.muted, marginBottom: 12 }}>No hay planes próximos.</div>
+              <div style={{ display: 'inline-flex', gap: 8 }}>
+                <button style={{ ...s.btnGhost, fontSize: 12, padding: '5px 12px' }} onClick={onAddPlan}>+ Añadir plan</button>
+                <button style={{ ...s.btnGhost, fontSize: 12, padding: '5px 12px' }} onClick={() => setFilter(filter === 'past' ? 'upcoming' : 'past')}>
+                  {filter === 'past' ? 'Próximos' : 'Anteriores'} ▾
+                </button>
+              </div>
             </div>
-          )}
-
-          <table style={s.planTable}>
-            <thead>
-              <tr>
-                <th style={s.planTh}>Próximas ocurrencias</th>
-                <th style={s.planTh}>Hora</th>
-              </tr>
-            </thead>
-            <tbody>
-              {next5.length === 0 && (
-                <tr><td colSpan={2} style={{ ...s.planTd, color: C.muted, fontSize: 12, textAlign: 'center', padding: '16px' }}>
-                  No hay ocurrencias futuras
-                </td></tr>
-              )}
-              {next5.map((o, i) => (
-                <tr key={i}>
-                  <td style={{ ...s.planTd, color: C.text, fontSize: 13 }}>{fmtDate(o.date)}</td>
-                  <td style={{ ...s.planTd, color: C.muted, fontSize: 12 }}>{o.start_time} – {o.end_time}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          {plans.length > 0 && (
+          ) : (
             <>
-              <div style={{ padding: '12px 16px 4px', fontSize: 11, fontWeight: 700, color: C.light, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Planes guardados</div>
-              <table style={s.planTable}>
-                <tbody>
-                  {plans.map(p => (
-                    <tr key={p.id}>
-                      <td style={{ ...s.planTd, color: C.muted, fontSize: 12 }}>{fmtDate(p.scheduled_at)}</td>
-                      <td style={s.planTd}>{p.title}</td>
-                      <td style={s.planTd}>
-                        <span style={{
-                          ...s.pill,
-                          background: p.status === 'published' ? C.successLight : C.soft,
-                          color: p.status === 'published' ? C.success : C.muted,
-                        }}>
-                          {p.status === 'draft' ? 'Borrador' : p.status === 'published' ? 'Publicado' : p.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px', borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`, background: C.bg }}>
+                <button style={{ ...s.btnGhost, fontSize: 12, padding: '4px 10px' }} onClick={() => {
+                  const next = filter === 'upcoming' ? 'past' : filter === 'past' ? 'all' : 'upcoming'
+                  setFilter(next)
+                }}>
+                  {filter === 'upcoming' ? 'Próximos' : filter === 'past' ? 'Anteriores' : 'Todos'} ▾
+                </button>
+                <div style={{ flex: 1, textAlign: 'center' as const, fontSize: 10, fontWeight: 700, color: C.light, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Título</div>
+                <div style={{ minWidth: 200, textAlign: 'right' as const, fontSize: 10, fontWeight: 700, color: C.light, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Última actualización</div>
+              </div>
+              {visible.map(p => (
+                <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', borderBottom: `1px solid ${C.border}` }}>
+                  <div style={{ width: 140, fontSize: 13, color: C.text, fontWeight: 500 }}>
+                    {p.scheduled_at ? new Date(p.scheduled_at).toLocaleDateString('es', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                  </div>
+                  <div style={{ flex: 1, textAlign: 'center' as const, fontSize: 13, color: C.text }}>{p.title}</div>
+                  <div style={{ minWidth: 200, textAlign: 'right' as const, fontSize: 12, color: C.muted, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+                    <span>{fmtRelative(p.updated_at || p.created_at, '—')}</span>
+                    <button onClick={() => { if (confirm(`¿Eliminar el plan "${p.title}"?`)) onDeletePlan(p) }}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, padding: 2, fontSize: 14 }} title="Eliminar plan">×</button>
+                  </div>
+                </div>
+              ))}
+              <div style={{ padding: '10px 16px' }}>
+                <button style={{ ...s.btnGhost, fontSize: 12, padding: '5px 12px' }} onClick={onAddPlan}>+ Añadir plan</button>
+              </div>
             </>
           )}
         </div>
@@ -649,24 +674,50 @@ function ServiceTypeCard({ type, plans, occurrences, onDelete, onAddPlan }: {
 // ─────────────────────────────────────────────────────────────────────────────
 // AddPlanModal — quick add of a one-off plan instance
 // ─────────────────────────────────────────────────────────────────────────────
-function AddPlanModal({ slug, typeId, onCreated, onClose }: {
-  slug: string; typeId: string | null
+function AddPlanModal({ slug, typeId, typeName, onCreated, onClose }: {
+  slug: string; typeId: string | null; typeName?: string
   onCreated: (p: ServicePlan) => void; onClose: () => void
 }) {
   const [title, setTitle] = useState('')
-  const [date, setDate] = useState(nextSundayISO())
-  const [time, setTime] = useState('11:00')
+  const [date, setDate] = useState('')
+  const [time, setTime] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [loadingDefault, setLoadingDefault] = useState(true)
+
+  // Fetch default scheduled_at from the service-type configuration
+  useEffect(() => {
+    if (!typeId) { setLoadingDefault(false); return }
+    let alive = true
+    setLoadingDefault(true)
+    api(`/api/v1/tenant/${slug}/services/types/${typeId}/next-default`)
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { scheduled_at?: string } | null) => {
+        if (!alive) return
+        if (d?.scheduled_at) {
+          const dt = new Date(d.scheduled_at)
+          setDate(dt.toISOString().slice(0, 10))
+          setTime(dt.toTimeString().slice(0, 5))
+        } else {
+          setDate(nextSundayISO())
+          setTime('11:00')
+        }
+      })
+      .catch(() => { setDate(nextSundayISO()); setTime('11:00') })
+      .finally(() => { if (alive) setLoadingDefault(false) })
+    return () => { alive = false }
+  }, [slug, typeId])
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
-    if (!title.trim()) { setErr('Título requerido'); return }
     setBusy(true); setErr('')
     try {
+      const payload: Record<string, unknown> = { service_type_id: typeId }
+      if (title.trim()) payload.title = title.trim()
+      if (date && time) payload.scheduled_at = `${date}T${time}:00`
       const res = await api(`/api/v1/tenant/${slug}/services/plans`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: title.trim(), scheduled_at: `${date}T${time}:00`, service_type_id: typeId }),
+        body: JSON.stringify(payload),
       })
       if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.detail || 'Error') }
       onCreated(await res.json())
@@ -675,20 +726,24 @@ function AddPlanModal({ slug, typeId, onCreated, onClose }: {
 
   return (
     <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <form style={{ ...s.modal, width: 420 }} onSubmit={submit}>
-        <h3 style={s.modalTitle}>Añadir plan</h3>
+      <form style={{ ...s.modal, width: 440 }} onSubmit={submit}>
+        <h3 style={s.modalTitle}>Añadir plan{typeName ? ` · ${typeName}` : ''}</h3>
+        <p style={{ fontSize: 12, color: C.muted, marginTop: -4, marginBottom: 14 }}>
+          La fecha y hora se han pre-rellenado con la siguiente ocurrencia configurada en el tipo. Edítalas si lo necesitas.
+        </p>
         <label style={s.label}>
-          Título
-          <input style={s.input} autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="p. ej. Servicio 24 mayo" />
+          Título <span style={{ color: C.muted, fontSize: 11, fontWeight: 400 }}>(opcional)</span>
+          <input style={s.input} autoFocus value={title} onChange={e => setTitle(e.target.value)}
+            placeholder={typeName && date ? `${typeName} · ${new Date(date).toLocaleDateString('es', { day: '2-digit', month: 'short', year: 'numeric' })}` : 'Se autogenera si lo dejas vacío'} />
         </label>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <label style={s.label}>Fecha<input type="date" style={s.input} value={date} onChange={e => setDate(e.target.value)} /></label>
-          <label style={s.label}>Hora<input type="time" style={s.input} value={time} onChange={e => setTime(e.target.value)} /></label>
+          <label style={s.label}>Fecha<input type="date" style={s.input} value={date} onChange={e => setDate(e.target.value)} disabled={loadingDefault} /></label>
+          <label style={s.label}>Hora<input type="time" style={s.input} value={time} onChange={e => setTime(e.target.value)} disabled={loadingDefault} /></label>
         </div>
         {err && <p style={s.errorText}>{err}</p>}
         <div style={s.modalActions}>
           <button type="button" style={s.btnGhost} onClick={onClose}>Cancelar</button>
-          <button type="submit" disabled={busy} style={s.btnPrimary}>{busy ? '…' : 'Crear'}</button>
+          <button type="submit" disabled={busy || loadingDefault} style={s.btnPrimary}>{busy ? '…' : 'Crear'}</button>
         </div>
       </form>
     </div>
@@ -755,17 +810,25 @@ function ListView({ slug, types, setTypes, teams }: {
         <main style={s.main}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <h2 style={s.mainTitle}>Tipos de servicio</h2>
-            <button style={s.btnPrimary} onClick={() => setWizardOpen(true)}>+ Nuevo servicio</button>
+            <button style={s.btnPrimary} onClick={() => setWizardOpen(true)}>+ Añadir</button>
           </div>
           {types.map(t => (
             <ServiceTypeCard key={t.id}
               type={t}
               plans={plansFor(t.id)}
-              occurrences={occurrences}
               onDelete={() => deleteType(t.id)}
               onAddPlan={() => setPlanForType(t.id)}
+              onDeletePlan={async (plan) => {
+                const r = await api(`/api/v1/tenant/${slug}/services/plans/${plan.id}`, { method: 'DELETE' })
+                if (r.ok) setPlans(prev => prev.filter(x => x.id !== plan.id))
+              }}
             />
           ))}
+          <div style={{ marginTop: 14 }}>
+            <button style={{ ...s.btnGhost, fontSize: 12, padding: '6px 14px' }} disabled title="Próximamente">
+              Ver tipos de servicio eliminados recientemente
+            </button>
+          </div>
         </main>
       </div>
 
@@ -776,7 +839,8 @@ function ListView({ slug, types, setTypes, teams }: {
       )}
       {planForType && (
         <AddPlanModal slug={slug} typeId={planForType}
-          onCreated={p => { setPlans(prev => [p, ...prev]); setPlanForType(null) }}
+          typeName={types.find(t => t.id === planForType)?.name}
+          onCreated={p => { setPlans(prev => [p, ...prev]); setPlanForType(null); refresh() }}
           onClose={() => setPlanForType(null)} />
       )}
       {masterOpen && (
