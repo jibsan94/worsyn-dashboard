@@ -7,9 +7,16 @@
 // Real `/api/v1/tenant/{slug}/...` endpoints wired where they exist; the prototype's
 // mock data fills the rest until the matching backend lands.
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import ServiciosLegacy, { PersonDetailView as LegacyPersonDetailView, TeamDetailView as LegacyTeamDetailView } from './ServiciosLegacy'
+import ServiciosLegacy, {
+  ComposeEmailModal, BlockoutModal, TeamFormModal, TeamBulkEmailModal,
+  AddPositionModal, AddLeaderModal, AddPersonsToPositionModal,
+} from './ServiciosLegacy'
+import type {
+  ServicePerson, Team, EmailMessage, PersonTeam, Blockout, OrgMemberLite,
+  ServiceType, TeamDetailPayload, TeamPositionInfo, TeamPerson, ServiceRole,
+} from './ServiciosLegacy'
 import { I } from '../components/IconsV2'
 import '../styles/tenant.css'
 
@@ -1872,62 +1879,1155 @@ function Personas({ slug, allTeams, onOpenPerson, onOpenTeam }: {
   )
 }
 
-function PersonaDetail({ persona, onBack }: { persona: UiPersona; onBack: () => void }) {
-  const p = persona
+// ─────────────────────────────────────────────────────────────
+// V2 PersonaDetail — Programación · Comunicación · Detalles
+// ─────────────────────────────────────────────────────────────
+function SectionHead({ title, info, right }: { title: string; info?: boolean; right?: React.ReactNode }) {
+  return (
+    <div className="row-between" style={{ marginBottom: 12 }}>
+      <div className="row" style={{ gap: 6 }}>
+        <h2 style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em' }}>{title}</h2>
+        {info && (
+          <span style={{
+            width: 14, height: 14, borderRadius: 99, border: '1.5px solid var(--text-4)',
+            color: 'var(--text-4)', fontSize: 9, display: 'grid', placeItems: 'center', fontWeight: 700,
+          }}>i</span>
+        )}
+      </div>
+      {right}
+    </div>
+  )
+}
+
+interface PersonaP {
+  name: string; email: string; role: 'admin' | 'leader' | 'member';
+  active: boolean; c: number; lastSeen: string; joined: string;
+}
+function adaptPerson(raw: any): PersonaP {
+  const sr = raw?.service_role || ''
+  const role: PersonaP['role'] = sr === 'administrator' ? 'admin' : (sr === 'editor' || sr === 'coordinator') ? 'leader' : 'member'
+  const fullName = raw?.full_name || (raw?.email ? String(raw.email).split('@')[0] : 'Sin nombre')
+  const id = String(raw?.id || raw?.member_id || '')
+  const hash = id.split('').reduce((a, ch) => a + ch.charCodeAt(0), 0)
+  return {
+    name: fullName,
+    email: raw?.email || '',
+    role,
+    active: raw?.is_active !== false,
+    c: (hash % 8) + 1,
+    lastSeen: raw?.last_seen_at ? new Date(raw.last_seen_at).toLocaleDateString('es-ES') : '—',
+    joined: raw?.welcomed_at ? new Date(raw.welcomed_at).toLocaleDateString('es-ES') : '—',
+  }
+}
+
+const SERVICE_ROLE_LABEL_FULL: Record<ServiceRole, string> = {
+  administrator: 'Administrador',
+  editor: 'Editor',
+  coordinator: 'Coordinador',
+  viewer: 'Visualizador',
+  scheduled_viewer: 'Visualizador programado',
+}
+
+function PersonaDetail({ slug, person, allTeams, onBack, onChanged }: {
+  slug: string; person: ServicePerson; allTeams: Team[]; onBack: () => void; onChanged: (p: ServicePerson) => void;
+}) {
+  const p = adaptPerson(person)
+  const [tab, setTab] = useState<'programacion' | 'comunicacion' | 'detalles'>('programacion')
+  const [rolePickerOpen, setRolePickerOpen] = useState(false)
+  const [actionsOpen, setActionsOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  async function patchPerson(patch: Record<string, any>) {
+    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
+    })
+    if (r.ok) { onChanged(await r.json()); return true }
+    const j = await r.json().catch(() => ({} as any))
+    alert(j.detail || 'Error')
+    return false
+  }
+  async function changeServiceRole(newRole: ServiceRole) {
+    setBusy(true); try { await patchPerson({ service_role: newRole }) }
+    finally { setBusy(false); setRolePickerOpen(false) }
+  }
+  async function toggleActive() {
+    const next = !(person.is_active !== false)
+    const verb = next ? 'habilitar' : 'deshabilitar'
+    if (!confirm(`¿Seguro que quieres ${verb} a ${person.full_name || person.email}?`)) return
+    setBusy(true); try { await patchPerson({ is_active: next }) }
+    finally { setBusy(false); setActionsOpen(false) }
+  }
+  async function deletePerson() {
+    if (!confirm(`¿Eliminar a ${person.full_name || person.email}? Esta acción es irreversible.`)) return
+    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}`, { method: 'DELETE' })
+    if (r.ok) onBack()
+    else { const j = await r.json().catch(() => ({} as any)); alert(j.detail || 'Error') }
+  }
+
   return (
     <div className="content route-enter">
-      <div className="page-head rise">
+      <div className="page-head rise" style={{ alignItems: 'flex-start' }}>
         <div>
-          <div className="row" style={{ gap: 8, marginBottom: 8 }}>
-            <button className="btn btn-ghost btn-sm" onClick={onBack}><I.ChevLeft size={13}/> Personas</button>
-            <span className={'chip ' + (p.role === 'admin' ? 't-accent' : p.role === 'leader' ? 't-info' : 't-mono')}>{ROLE_LABEL[p.role]}</span>
-            <span className={'chip ' + (p.active ? 't-success' : '')}>
-              <span className="chip-dot" style={{ background: p.active ? 'currentColor' : 'var(--text-4)' }}/>
-              {p.active ? 'Activo' : 'Inactivo'}
-            </span>
+          <button className="btn btn-ghost btn-sm" onClick={onBack} style={{ marginBottom: 10, paddingLeft: 0 }}>
+            <I.ChevLeft size={13}/> PERSONAS
+          </button>
+          <div className="row" style={{ gap: 16 }}>
+            <div className="av" data-c={p.c} style={{ width: 60, height: 60, fontSize: 22, borderRadius: 18 }}>
+              {PersonaInitials(p.name)}
+            </div>
+            <div>
+              <h1 className="page-title" style={{ fontSize: 28 }}>{p.name}</h1>
+              <p className="page-sub mono" style={{ fontSize: 13, marginTop: 2 }}>{p.email}</p>
+            </div>
           </div>
-          <h1 className="page-title">{p.name.split(' ')[0]} <em>{p.name.split(' ').slice(1).join(' ')}</em></h1>
-          <p className="page-sub mono" style={{ fontSize: 13 }}>{p.email}</p>
         </div>
-        <div className="row" style={{ gap: 8 }}>
-          <button className="btn btn-secondary"><I.Send size={14}/> Mensaje</button>
-          <button className="btn btn-secondary"><I.Edit size={14}/> Editar</button>
+        <div className="row" style={{ gap: 8, marginTop: 4 }}>
+          {!p.active && (
+            <span className="chip" style={{ height: 30, color: 'var(--danger)', background: 'color-mix(in oklab, var(--danger) 12%, transparent)', fontWeight: 700, letterSpacing: 0.04 }}>
+              DESHABILITADO
+            </span>
+          )}
+          <div style={{ position: 'relative' }}>
+            <button className="btn btn-secondary" disabled={busy} onClick={() => { setRolePickerOpen(o => !o); setActionsOpen(false) }}>
+              <I.People size={14}/> {SERVICE_ROLE_LABEL_FULL[person.service_role] || 'Rol'} <I.ChevDown size={12}/>
+            </button>
+            {rolePickerOpen && (
+              <div className="dropdown-menu" style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 30, background: 'var(--surface)', border: '1px solid var(--separator)', borderRadius: 10, boxShadow: 'var(--shadow-2)', padding: 6, minWidth: 220 }}>
+                {(Object.keys(SERVICE_ROLE_LABEL_FULL) as ServiceRole[]).map(r => (
+                  <button key={r} onClick={() => changeServiceRole(r)} style={{
+                    width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: 8,
+                    background: r === person.service_role ? 'var(--accent-tint)' : 'transparent',
+                    color: r === person.service_role ? 'var(--accent)' : 'var(--text)',
+                    border: 0, cursor: 'pointer', fontSize: 13, fontWeight: 500,
+                  }}>{SERVICE_ROLE_LABEL_FULL[r]}</button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div style={{ position: 'relative' }}>
+            <button className="btn btn-secondary" disabled={busy} onClick={() => { setActionsOpen(o => !o); setRolePickerOpen(false) }}>
+              <I.Dots2 size={14}/> Acciones <I.ChevDown size={12}/>
+            </button>
+            {actionsOpen && (
+              <div className="dropdown-menu" style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 30, background: 'var(--surface)', border: '1px solid var(--separator)', borderRadius: 10, boxShadow: 'var(--shadow-2)', padding: 6, minWidth: 240 }}>
+                <button onClick={toggleActive} style={{ width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8, background: 'transparent', border: 0, cursor: 'pointer', fontSize: 13, color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 9 }}>
+                  {p.active ? <I.Power size={13}/> : <I.Check size={13}/>}
+                  {p.active ? 'Deshabilitar miembro' : 'Habilitar miembro'}
+                </button>
+                <button onClick={() => { setActionsOpen(false); deletePerson() }} style={{ width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8, background: 'transparent', border: 0, cursor: 'pointer', fontSize: 13, color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: 9 }}>
+                  <I.Trash size={13}/> Eliminar persona
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
-      <div className="grid grid-12 rise rise-d2">
-        <section className="col-4 card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 24px', gap: 14 }}>
-          <div className="av" data-c={p.c} style={{ width: 84, height: 84, fontSize: 28, borderRadius: 22 }}>{PersonaInitials(p.name)}</div>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 17, fontWeight: 600 }}>{p.name}</div>
-            <div style={{ fontSize: 12.5, color: 'var(--text-3)', marginTop: 2 }}>{p.team}</div>
-          </div>
-          <div className="divider" style={{ width: '100%' }}/>
-          <div style={{ width: '100%', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, textAlign: 'center' }}>
-            <div><div className="display-sans" style={{ fontSize: 22 }}>12</div><div style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'uppercase' }}>Servicios</div></div>
-            <div><div className="display-sans" style={{ fontSize: 22 }}>94<span style={{ color: 'var(--text-3)', fontSize: 14 }}>%</span></div><div style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'uppercase' }}>Confirmados</div></div>
+
+      <div className="row rise rise-d1" style={{ borderBottom: '1px solid var(--separator)', gap: 0, marginBottom: 'var(--gap)' }}>
+        {([
+          { id: 'programacion', l: 'Programación' },
+          { id: 'comunicacion', l: 'Comunicación' },
+          { id: 'detalles',     l: 'Detalles' },
+        ] as const).map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{
+            padding: '12px 16px', fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em',
+            background: 'transparent', border: 0, cursor: 'pointer',
+            color: tab === t.id ? 'var(--text)' : 'var(--text-3)',
+            borderBottom: '2px solid ' + (tab === t.id ? 'var(--accent)' : 'transparent'),
+            marginBottom: -1,
+          }}>{t.l}</button>
+        ))}
+      </div>
+
+      {tab === 'programacion' && <PersonaProgramacion slug={slug} person={person} allTeams={allTeams}/>}
+      {tab === 'comunicacion' && <PersonaComunicacion slug={slug} person={person} p={p}/>}
+      {tab === 'detalles'     && <PersonaDetalles p={p}/>}
+    </div>
+  )
+}
+
+function PersonaProgramacion({ slug, person, allTeams }: { slug: string; person: ServicePerson; allTeams: Team[] }) {
+  type RangePreset = 'upcoming' | '1m' | '3m' | '6m' | '12m'
+  const RANGE_LABELS: Record<RangePreset, string> = {
+    upcoming: 'Próximos', '1m': 'Último mes', '3m': 'Últimos 3 meses', '6m': 'Últimos 6 meses', '12m': 'Últimos 12 meses',
+  }
+  const [range, setRange] = useState<RangePreset>('upcoming')
+  const [rangeOpen, setRangeOpen] = useState(false)
+  const [summary, setSummary] = useState({ confirmed: 0, pending: 0, declined: 0, total: 0 })
+  const [blockouts, setBlockouts] = useState<Blockout[]>([])
+  const [blockoutOpen, setBlockoutOpen] = useState(false)
+  const [editBlockout, setEditBlockout] = useState<Blockout | null>(null)
+  const [personTeams, setPersonTeams] = useState<PersonTeam[]>([])
+
+  const reloadAssignments = useCallback(async () => {
+    const today = new Date()
+    const iso = (d: Date) => d.toISOString().slice(0, 10)
+    const qs = new URLSearchParams()
+    if (range === 'upcoming') qs.set('range_from', iso(today))
+    else {
+      const m = range === '1m' ? 1 : range === '3m' ? 3 : range === '6m' ? 6 : 12
+      const past = new Date(today); past.setMonth(past.getMonth() - m)
+      qs.set('range_from', iso(past)); qs.set('range_to', iso(today))
+    }
+    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/assignments?${qs}`)
+    if (r.ok) { const j = await r.json(); setSummary(j.summary || { confirmed: 0, pending: 0, declined: 0, total: 0 }) }
+  }, [slug, person.id, range])
+  const reloadBlockouts = useCallback(async () => {
+    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/blockouts`)
+    setBlockouts(r.ok ? await r.json() : [])
+  }, [slug, person.id])
+  const reloadPersonTeams = useCallback(async () => {
+    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/teams`)
+    setPersonTeams(r.ok ? await r.json() : [])
+  }, [slug, person.id])
+  useEffect(() => { reloadAssignments() }, [reloadAssignments])
+  useEffect(() => { reloadBlockouts() }, [reloadBlockouts])
+  useEffect(() => { reloadPersonTeams() }, [reloadPersonTeams])
+
+  async function removeBlockout(b: Blockout) {
+    if (!confirm('¿Eliminar este bloqueo?')) return
+    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/blockouts/${b.id}`, { method: 'DELETE' })
+    if (r.ok) setBlockouts(prev => prev.filter(x => x.id !== b.id))
+  }
+  async function removeTeam(pt: PersonTeam) {
+    if (!confirm(`¿Quitar a ${person.full_name || person.email} del equipo ${pt.team_name}?`)) return
+    const r = await api(`/api/v1/tenant/${slug}/teams/${pt.team_id}/members/${person.member_id}`, { method: 'DELETE' })
+    if (r.ok) setPersonTeams(prev => prev.filter(x => x.membership_id !== pt.membership_id))
+  }
+
+  const total = summary.total
+
+  return (
+    <div className="grid grid-12 rise rise-d2">
+      <div className="col-7 stack" style={{ gap: 'var(--gap)' }}>
+        <section>
+          <SectionHead title="Resumen de programación" info />
+          <div className="card">
+            <div style={{ padding: 14, borderBottom: '1px solid var(--separator)', position: 'relative' }}>
+              <button className="btn btn-secondary btn-sm" onClick={() => setRangeOpen(o => !o)}>{RANGE_LABELS[range]} <I.ChevDown size={12}/></button>
+              {rangeOpen && (
+                <div className="dropdown-menu" style={{ position: 'absolute', top: 'calc(100% - 4px)', left: 14, zIndex: 20, background: 'var(--surface)', border: '1px solid var(--separator)', borderRadius: 10, boxShadow: 'var(--shadow-2)', padding: 6, minWidth: 200 }}>
+                  {(Object.keys(RANGE_LABELS) as RangePreset[]).map(rk => (
+                    <button key={rk} onClick={() => { setRange(rk); setRangeOpen(false) }} style={{
+                      width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: 8,
+                      background: rk === range ? 'var(--accent-tint)' : 'transparent',
+                      color: rk === range ? 'var(--accent)' : 'var(--text)',
+                      border: 0, cursor: 'pointer', fontSize: 13,
+                    }}>{RANGE_LABELS[rk]}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div style={{ padding: 24, display: 'flex', alignItems: 'center', gap: 28 }}>
+              <div style={{ position: 'relative', width: 132, height: 132, flexShrink: 0 }}>
+                <svg viewBox="0 0 132 132" width="132" height="132">
+                  <circle cx="66" cy="66" r="56" fill="none" stroke="var(--surface-3)" strokeWidth="14"/>
+                </svg>
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                  <div className="display-sans" style={{ fontSize: 30, letterSpacing: '-0.02em', lineHeight: 1 }}>{total}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: 0.1, fontWeight: 600 }}>Total</div>
+                </div>
+              </div>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {[
+                  { l: 'Confirmados',  c: 'var(--success)', n: summary.confirmed },
+                  { l: 'Sin responder', c: 'var(--warning)', n: summary.pending },
+                  { l: 'Rechazados',   c: 'var(--danger)',  n: summary.declined },
+                ].map(r => (
+                  <div key={r.l} className="row-between">
+                    <div className="row" style={{ gap: 9 }}>
+                      <span style={{ width: 9, height: 9, borderRadius: 99, background: r.c }} />
+                      <span style={{ fontSize: 12.5, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: 0.06, fontWeight: 600 }}>{r.l}</span>
+                    </div>
+                    <span style={{ fontSize: 15, fontWeight: 700, color: r.c }}>{r.n}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {total === 0 && (
+              <div style={{ padding: '20px 24px', borderTop: '1px solid var(--separator)', textAlign: 'center', fontSize: 12.5, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                No hay planes en este rango. Responder a solicitudes ayuda al líder de equipo a cuadrar los servicios.
+              </div>
+            )}
           </div>
         </section>
-        <section className="col-8 card">
-          <div className="card-head"><div className="card-title">Información</div></div>
-          <div>
-            {[
-              { l: 'Email',           v: p.email, mono: true },
-              { l: 'Teléfono',        v: p.phone, mono: true },
-              { l: 'Equipo',          v: p.team },
-              { l: 'Rol',             v: ROLE_LABEL[p.role] },
-              { l: 'Última actividad', v: p.lastSeen },
-              { l: 'Alta',            v: p.joined, mono: true },
-            ].map((r, i) => (
-              <div key={i} className="list-row" style={{ borderRadius: 0 }}>
-                <div className="list-body" style={{ display: 'grid', gridTemplateColumns: '160px 1fr', alignItems: 'center', gap: 16 }}>
-                  <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>{r.l}</div>
-                  <div className={r.mono ? 'mono' : ''} style={{ fontSize: 13.5 }}>{r.v}</div>
+
+        <section>
+          <SectionHead title="Calendario" info right={<button className="btn btn-secondary btn-sm" onClick={() => { setEditBlockout(null); setBlockoutOpen(true) }}><I.Plus size={12}/> Añadir bloqueo</button>} />
+          <div className="card">
+            <div style={{ padding: 14, borderBottom: '1px solid var(--separator)', fontSize: 13, fontWeight: 600 }}>Próximos bloqueos</div>
+            {blockouts.length === 0 ? (
+              <div style={{ padding: '28px 24px', textAlign: 'center', fontSize: 12.5, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                No hay bloqueos. Pulsa <b style={{ color: 'var(--text-2)' }}>+ Añadir bloqueo</b> para registrar un periodo de indisponibilidad.
+              </div>
+            ) : blockouts.map(b => (
+              <div key={b.id} className="list-row" style={{ borderRadius: 0 }}>
+                <div className="list-body">
+                  <div className="list-title" style={{ fontSize: 13.5 }}>{b.reason || 'Sin título'}</div>
+                  <div className="list-sub mono" style={{ fontSize: 12 }}>{b.start_date}{b.end_date && b.end_date !== b.start_date ? ` → ${b.end_date}` : ''}</div>
                 </div>
+                <button className="icon-btn" onClick={() => { setEditBlockout(b); setBlockoutOpen(true) }}><I.Edit size={13}/></button>
+                <button className="icon-btn" onClick={() => removeBlockout(b)}><I.Trash size={13}/></button>
               </div>
             ))}
           </div>
         </section>
       </div>
+
+      <div className="col-5 stack" style={{ gap: 'var(--gap)' }}>
+        <section>
+          <SectionHead title="Preferencias" info />
+          <div className="card">
+            <div className="row" style={{ gap: 12, padding: 16 }}>
+              <div style={{ width: 38, height: 38, borderRadius: 10, background: 'var(--accent-2-tint)', color: 'var(--success)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                <I.Cal size={17}/>
+              </div>
+              <div style={{ fontSize: 13.5, color: 'var(--text)', fontWeight: 500 }}>
+                {person.scheduling?.max_per_month
+                  ? `Máximo ${person.scheduling.max_per_month} planes al mes`
+                  : 'Prográmame todas las veces que quieras'}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <SectionHead title="Equipos" info right={<TeamAdderInline slug={slug} person={person} allTeams={allTeams} excludeIds={personTeams.map(pt => pt.team_id)} onAdded={() => reloadPersonTeams()}/>} />
+          <div className="card">
+            {personTeams.length === 0 ? (
+              <div style={{ padding: 16, fontSize: 13, color: 'var(--text-3)' }}>Aún no pertenece a ningún equipo.</div>
+            ) : personTeams.map(pt => (
+              <div key={pt.membership_id} className="list-row" style={{ borderRadius: 0 }}>
+                <span style={{ width: 12, height: 12, borderRadius: 4, background: pt.team_color || 'var(--accent-4)', flexShrink: 0 }} />
+                <div className="list-body"><div className="list-title" style={{ fontSize: 13.5 }}>{pt.team_name}</div></div>
+                <button className="icon-btn" onClick={() => removeTeam(pt)}><I.X size={13}/></button>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      {blockoutOpen && (
+        <BlockoutModal slug={slug} smId={person.id} initial={editBlockout ?? undefined}
+          onSaved={() => { reloadBlockouts(); setBlockoutOpen(false); setEditBlockout(null) }}
+          onClose={() => { setBlockoutOpen(false); setEditBlockout(null) }}/>
+      )}
+    </div>
+  )
+}
+
+function TeamAdderInline({ slug, person, allTeams, excludeIds, onAdded }: {
+  slug: string; person: ServicePerson; allTeams: Team[]; excludeIds: string[]; onAdded: () => void;
+}) {
+  const [open, setOpen] = useState(false)
+  const [pickedTeamId, setPickedTeamId] = useState('')
+  const [positions, setPositions] = useState<{ id: string; name: string }[]>([])
+  const [pickedPosIds, setPickedPosIds] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
+  const avail = allTeams.filter(t => !excludeIds.includes(t.id))
+
+  useEffect(() => {
+    setPickedPosIds([])
+    setPositions([])
+    if (!pickedTeamId) return
+    let cancel = false
+    api(`/api/v1/tenant/${slug}/teams/${pickedTeamId}/detail`).then(r => r.ok ? r.json() : null).then((d: any) => {
+      if (cancel || !d) return
+      setPositions((d.positions || []).map((p: any) => ({ id: p.id, name: p.name })))
+    })
+    return () => { cancel = true }
+  }, [slug, pickedTeamId])
+
+  async function submit() {
+    if (!pickedTeamId) return
+    setBusy(true)
+    try {
+      const r1 = await api(`/api/v1/tenant/${slug}/teams/${pickedTeamId}/members`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ member_id: person.member_id }),
+      })
+      if (!r1.ok && r1.status !== 409) {
+        const j = await r1.json().catch(() => ({} as any)); alert(j.detail || 'Error añadiendo al equipo'); return
+      }
+      for (const posId of pickedPosIds) {
+        await api(`/api/v1/tenant/${slug}/teams/${pickedTeamId}/positions/${posId}/members`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ member_ids: [person.member_id] }),
+        })
+      }
+      onAdded()
+      setOpen(false); setPickedTeamId(''); setPickedPosIds([])
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <>
+      <button className="btn btn-ghost btn-sm" disabled={avail.length === 0} onClick={() => setOpen(true)}><I.Plus size={12}/> Añadir</button>
+      {open && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 100, display: 'grid', placeItems: 'center', padding: 20 }} onClick={() => setOpen(false)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--surface)', borderRadius: 16, padding: 24, width: 480, maxHeight: '85vh', overflow: 'auto' }}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>Añadir a un equipo</h3>
+            <label style={{ fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>Equipo</label>
+            <select value={pickedTeamId} onChange={e => setPickedTeamId(e.target.value)} style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--separator)', marginTop: 6, marginBottom: 14, background: 'var(--surface-2)', color: 'var(--text)' }}>
+              <option value="">Selecciona…</option>
+              {avail.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            {positions.length > 0 && (
+              <>
+                <label style={{ fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>Posiciones (opcional)</label>
+                <div style={{ marginTop: 6, marginBottom: 14, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {positions.map(p => {
+                    const on = pickedPosIds.includes(p.id)
+                    return (
+                      <button key={p.id} onClick={() => setPickedPosIds(prev => on ? prev.filter(x => x !== p.id) : [...prev, p.id])}
+                        className={'chip' + (on ? ' is-on' : '')} style={{ cursor: 'pointer', background: on ? 'var(--accent-tint)' : 'var(--surface-3)', color: on ? 'var(--accent)' : 'var(--text-2)', border: '1px solid ' + (on ? 'var(--accent)' : 'var(--separator)') }}>{p.name}</button>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+            <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn btn-ghost" onClick={() => setOpen(false)}>Cancelar</button>
+              <button className="btn btn-primary" disabled={busy || !pickedTeamId} onClick={submit}>{busy ? 'Añadiendo…' : 'Añadir'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+function PersonaComunicacion({ slug, person, p }: { slug: string; person: ServicePerson; p: PersonaP }) {
+  const [box, setBox] = useState<'recibidos' | 'enviados'>('recibidos')
+  const [msgs, setMsgs] = useState<EmailMessage[]>([])
+  const [composeOpen, setComposeOpen] = useState(false)
+  const [sendingReset, setSendingReset] = useState(false)
+
+  const reloadMsgs = useCallback(async () => {
+    const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/messages`)
+    setMsgs(r.ok ? await r.json() : [])
+  }, [slug, person.id])
+  useEffect(() => { reloadMsgs() }, [reloadMsgs])
+
+  async function sendPasswordReset() {
+    if (!confirm(`¿Enviar email de restablecimiento de contraseña a ${person.full_name || person.email}?\n\nEl enlace caduca en 10 minutos.`)) return
+    setSendingReset(true)
+    try {
+      const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/password-reset`, { method: 'POST' })
+      if (!r.ok) { const j = await r.json().catch(() => ({})); alert((j as any).detail || 'Error al enviar'); return }
+      const j = await r.json()
+      alert(`Email enviado a ${j.email}\n\nEl enlace caduca en ${j.expires_minutes} minutos.`)
+      reloadMsgs()
+      setTimeout(reloadMsgs, 2500)
+    } finally { setSendingReset(false) }
+  }
+  async function deleteMsg(m: EmailMessage) {
+    if (!confirm('¿Eliminar este mensaje de Worsyn?')) return
+    const r = await api(`/api/v1/tenant/${slug}/email/messages/${m.id}`, { method: 'DELETE' })
+    if (r.ok) setMsgs(prev => prev.filter(x => x.id !== m.id))
+  }
+
+  const filtered = msgs.filter(m => (box === 'recibidos' ? m.direction === 'received' : m.direction === 'sent'))
+
+  return (
+    <div className="grid grid-12 rise rise-d2">
+      <div className="col-7 stack" style={{ gap: 'var(--gap)' }}>
+        <section>
+          <SectionHead title="Mensajes" right={<button className="btn btn-primary btn-sm" onClick={() => setComposeOpen(true)}><I.Plus size={12}/> Nuevo</button>} />
+          <div className="card">
+            <div className="row" style={{ padding: '8px 8px 0', gap: 0, borderBottom: '1px solid var(--separator)' }}>
+              {(['recibidos','enviados'] as const).map(id => (
+                <button key={id} onClick={() => setBox(id)} style={{
+                  padding: '8px 14px', fontSize: 13, fontWeight: 600,
+                  background: 'transparent', border: 0, cursor: 'pointer',
+                  color: box === id ? 'var(--text)' : 'var(--text-3)',
+                  borderBottom: '2px solid ' + (box === id ? 'var(--accent)' : 'transparent'),
+                  marginBottom: -1,
+                }}>{id === 'recibidos' ? 'Recibidos' : 'Enviados'}</button>
+              ))}
+            </div>
+            {filtered.length === 0 ? (
+              <div style={{ padding: '32px 24px', textAlign: 'center', fontSize: 12.5, color: 'var(--text-3)' }}>
+                {box === 'recibidos' ? 'No hay mensajes recibidos.' : 'No hay mensajes enviados.'}
+              </div>
+            ) : filtered.map(m => (
+              <div key={m.id} className="list-row" style={{ borderRadius: 0, alignItems: 'flex-start' }}>
+                <div className="list-body">
+                  <div className="list-title" style={{ fontSize: 13.5, fontWeight: 600 }}>{m.subject || '(sin asunto)'}</div>
+                  <div className="list-sub" style={{ marginTop: 3 }}>
+                    De: {m.counterparty_name || m.sender_email || '—'} <span className="pill-tone tone-violet" style={{ marginLeft: 4 }}>{m.direction === 'received' ? 'Recibido' : 'Enviado'}</span>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+                  <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{m.sent_at ? new Date(m.sent_at).toLocaleDateString('es-ES') : ''}</span>
+                  <button className="icon-btn" onClick={() => deleteMsg(m)}><I.Trash size={13}/></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section>
+          <SectionHead title="Contraseña" info />
+          <div className="card">
+            <div style={{ padding: 18 }}>
+              <button className="btn btn-primary" disabled={sendingReset} onClick={sendPasswordReset}><I.Send size={14}/> {sendingReset ? 'Enviando…' : 'Enviar email de restablecimiento'}</button>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 12, lineHeight: 1.5 }}>
+                La persona recibirá un correo con un enlace para elegir una nueva contraseña. <b style={{ color: 'var(--text-2)' }}>Caduca en 10 minutos</b> — si lo necesita después, reenvíalo desde aquí.
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div className="col-5 stack" style={{ gap: 'var(--gap)' }}>
+        <section>
+          <SectionHead title="Notificaciones" info />
+          <div className="card">
+            <div style={{ padding: 16 }}>
+              <div className="row" style={{ gap: 12, marginBottom: 12 }}>
+                <div style={{ width: 38, height: 38, borderRadius: 10, background: 'var(--accent-2-tint)', color: 'var(--success)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                  <I.Bell size={16}/>
+                </div>
+                <div style={{ fontSize: 13.5, fontWeight: 600 }}>App preferida</div>
+              </div>
+              <button className="btn btn-secondary" style={{ width: '100%', justifyContent: 'space-between' }}>Servicios (este módulo) <I.ChevDown size={13}/></button>
+              <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 10, lineHeight: 1.5 }}>
+                Cuando la app móvil esté disponible, las notificaciones push llegarán al app elegido. Por defecto es <b style={{ color: 'var(--text-2)' }}>Servicios</b>.
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <SectionHead title="Firma" info right={<button className="btn btn-ghost btn-sm">Editar</button>} />
+          <div className="card">
+            <div style={{ padding: 18 }}>
+              <div style={{ fontSize: 13.5, color: 'var(--text-3)', fontStyle: 'italic' }}>Sin firma de texto.</div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-4)', marginTop: 10, lineHeight: 1.5 }}>
+                Se adjuntará automáticamente al final de los correos enviados desde el portal (cuando SMTP esté activo).
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      {composeOpen && (
+        <ComposeEmailModal slug={slug} defaultRecipient={person}
+          onClose={() => setComposeOpen(false)}
+          onSent={() => { setComposeOpen(false); reloadMsgs(); setTimeout(reloadMsgs, 2000) }}/>
+      )}
+    </div>
+  )
+}
+
+function PersonaDetalles({ p }: { p: PersonaP }) {
+  return (
+    <div className="grid grid-12 rise rise-d2">
+      <div className="col-4">
+        <SectionHead title="Etiquetas" info right={<button className="btn btn-ghost btn-sm"><I.Plus size={12}/> Añadir</button>} />
+        <div className="card"><div style={{ padding: 18, fontSize: 13, color: 'var(--text-3)' }}>Sin etiquetas todavía.</div></div>
+      </div>
+
+      <div className="col-4 stack" style={{ gap: 'var(--gap)' }}>
+        <div>
+          <SectionHead title="Notas" info />
+          <div className="card">
+            <textarea placeholder="Aún no hay notas." style={{
+              width: '100%', minHeight: 96, border: 0, background: 'transparent', resize: 'vertical',
+              padding: 16, fontSize: 13.5, color: 'var(--text)', fontFamily: 'inherit', outline: 'none',
+            }} />
+          </div>
+        </div>
+        <div>
+          <SectionHead title="Archivos" right={<button className="btn btn-ghost btn-sm"><I.Plus size={12}/> Añadir</button>} />
+          <div className="card">
+            <div style={{ margin: 14, padding: '28px 16px', border: '1.5px dashed var(--hairline)', borderRadius: 12, textAlign: 'center', fontSize: 13, color: 'var(--text-3)' }}>
+              Arrastra y suelta o <span style={{ color: 'var(--accent)', fontWeight: 600 }}>haz clic aquí</span> para añadir tu primer archivo.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="col-4 stack" style={{ gap: 'var(--gap)' }}>
+        <div>
+          <SectionHead title="Carpeta actual" info />
+          <div className="card">
+            <div style={{ padding: 14 }}>
+              <button className="btn btn-secondary" style={{ width: '100%', justifyContent: 'flex-start', color: 'var(--text-3)' }}><I.Search size={13}/> Buscar carpeta…</button>
+            </div>
+          </div>
+        </div>
+        <div>
+          <SectionHead title="Actividad" />
+          <div className="card">
+            {[['Último acceso', p.active ? p.lastSeen : '—'], ['Creado', p.joined]].map(([l, v]) => (
+              <div key={l} className="list-row" style={{ borderRadius: 0 }}>
+                <div className="list-body"><div style={{ fontSize: 13, color: 'var(--text-2)' }}>{l}</div></div>
+                <span className="mono" style={{ fontSize: 12.5, color: v === '—' ? 'var(--text-4)' : 'var(--text)' }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+// V2 EquipoDetail — Miembros · Configuración · Automatizaciones
+// ─────────────────────────────────────────────────────────────
+function teamInitials(name: string) {
+  return name.split(' ').filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase()
+}
+
+function EquipoDetail({ slug, team, allTeams, orgMembers, types, currentMemberId, onBack, onOpenPerson, onTeamChanged, onTeamDeleted, onPeopleInvalidate }: {
+  slug: string; team: Team; allTeams: Team[]; orgMembers: OrgMemberLite[]; types: ServiceType[];
+  currentMemberId: string | null;
+  onBack: () => void; onOpenPerson: (memberId: string) => void;
+  onTeamChanged: (t: Team) => void; onTeamDeleted: () => void; onPeopleInvalidate: () => void;
+}) {
+  const [tab, setTab] = useState<'miembros' | 'config' | 'auto'>('miembros')
+  const [detail, setDetail] = useState<TeamDetailPayload | null>(null)
+  const [editNameOpen, setEditNameOpen] = useState(false)
+
+  const reloadDetail = useCallback(async () => {
+    const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}/detail`)
+    if (r.ok) setDetail(await r.json())
+  }, [slug, team.id])
+  useEffect(() => { reloadDetail() }, [reloadDetail])
+
+  const teamTypeLabel = team.is_split ? 'Dividido' : team.is_secure ? 'Seguro' : 'Ensayo'
+  const stIds = detail?.team?.service_type_ids || team.service_type_ids || []
+  const stTags = stIds.map(id => types.find(t => t.id === id)?.name).filter(Boolean) as string[]
+  const tags: string[] = [teamTypeLabel, ...stTags]
+
+  return (
+    <div className="content route-enter">
+      <div className="page-head rise" style={{ alignItems: 'flex-start' }}>
+        <div>
+          <button className="btn btn-ghost btn-sm" onClick={onBack} style={{ marginBottom: 10, paddingLeft: 0 }}>
+            <I.ChevLeft size={13}/> EQUIPOS
+          </button>
+          <div className="row" style={{ gap: 12 }}>
+            <span style={{ width: 18, height: 18, borderRadius: 6, background: team.color || '#AF52DE', flexShrink: 0 }} />
+            <h1 className="page-title" style={{ fontSize: 28 }}>{team.name}</h1>
+          </div>
+          <div className="row" style={{ gap: 7, marginTop: 10, flexWrap: 'wrap' }}>
+            {tags.map((tg, i) => (
+              <span key={i + tg} className={i === 0 ? 'pill-tone tone-violet' : 'chip'} style={{ height: 24 }}>{tg}</span>
+            ))}
+          </div>
+        </div>
+        <button className="btn btn-secondary" style={{ marginTop: 4 }} onClick={() => setEditNameOpen(true)}><I.Edit size={13}/> Editar nombre</button>
+      </div>
+
+      <div className="row rise rise-d1" style={{ borderBottom: '1px solid var(--separator)', gap: 0, marginBottom: 'var(--gap)' }}>
+        {([
+          { id: 'miembros', l: 'Miembros' },
+          { id: 'config',   l: 'Configuración' },
+          { id: 'auto',     l: 'Automatizaciones' },
+        ] as const).map(tb => (
+          <button key={tb.id} onClick={() => setTab(tb.id)} style={{
+            padding: '12px 16px', fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em',
+            background: 'transparent', border: 0, cursor: 'pointer',
+            color: tab === tb.id ? 'var(--text)' : 'var(--text-3)',
+            borderBottom: '2px solid ' + (tab === tb.id ? 'var(--accent)' : 'transparent'),
+            marginBottom: -1,
+          }}>{tb.l}</button>
+        ))}
+      </div>
+
+      {tab === 'miembros' && <EquipoMiembros slug={slug} team={team} detail={detail}
+        orgMembers={orgMembers} currentMemberId={currentMemberId}
+        onOpenPerson={onOpenPerson}
+        onChanged={() => { reloadDetail(); onPeopleInvalidate() }}/>}
+      {tab === 'config' && <EquipoConfig slug={slug} team={team} allTeams={allTeams} types={types} detail={detail}
+        onChanged={() => { reloadDetail(); onTeamChanged({ ...team }) }}
+        onDeleted={onTeamDeleted}/>}
+      {tab === 'auto' && (
+        <div className="rise rise-d2 card" style={{ borderStyle: 'dashed', padding: '52px 24px', textAlign: 'center' }}>
+          <div style={{ fontSize: 13.5, color: 'var(--text-3)' }}>
+            Próximamente — automatizaciones del equipo (recordatorios, asignaciones automáticas, etc.).
+          </div>
+        </div>
+      )}
+
+      {editNameOpen && (
+        <TeamFormModal slug={slug} initial={team} orgMembers={orgMembers} types={types} currentMemberId={currentMemberId}
+          onSaved={(t: Team) => { onTeamChanged(t); setEditNameOpen(false) }}
+          onClose={() => setEditNameOpen(false)}/>
+      )}
+    </div>
+  )
+}
+
+function NavItem({ label, n, active, onClick }: { label: string; n: number; active: boolean; onClick: () => void }) {
+  return (
+    <button onClick={onClick} style={{
+      width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      padding: '9px 12px', borderRadius: 10, cursor: 'pointer', border: 0,
+      background: active ? 'var(--accent-tint)' : 'transparent',
+      color: active ? 'var(--accent)' : 'var(--text-2)',
+      fontSize: 13.5, fontWeight: active ? 600 : 500, textAlign: 'left',
+    }}>
+      <span>{label}</span>
+      <span style={{
+        minWidth: 22, height: 20, padding: '0 7px', borderRadius: 999,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 11, fontWeight: 700, fontFamily: "'Geist Mono', monospace",
+        background: active ? 'var(--accent)' : 'var(--surface-3)',
+        color: active ? 'var(--on-accent)' : 'var(--text-3)',
+      }}>{n}</span>
+    </button>
+  )
+}
+
+function EquipoMiembros({ slug, team, detail, orgMembers, currentMemberId, onOpenPerson, onChanged }: {
+  slug: string; team: Team; detail: TeamDetailPayload | null;
+  orgMembers: OrgMemberLite[]; currentMemberId: string | null;
+  onOpenPerson: (memberId: string) => void; onChanged: () => void;
+}) {
+  const [view, setView] = useState<string>('all')
+  const [addPosOpen, setAddPosOpen] = useState(false)
+  const [addLeaderOpen, setAddLeaderOpen] = useState(false)
+  const [addToPos, setAddToPos] = useState<TeamPositionInfo | null>(null)
+  const [bulkEmail, setBulkEmail] = useState<TeamPerson[] | null>(null)
+
+  if (!detail) {
+    return <div className="card" style={{ padding: 40, textAlign: 'center', fontSize: 13, color: 'var(--text-3)' }}>Cargando…</div>
+  }
+
+  const allMembers: TeamPerson[] = detail.all_members || []
+  const leaders: TeamPerson[] = detail.leaders || []
+  const positions: TeamPositionInfo[] = detail.positions || []
+  const activeRows: TeamPerson[] = view === 'all'
+    ? allMembers
+    : view === 'leaders'
+      ? leaders
+      : (positions.find(p => p.id === view)?.members || []) as TeamPerson[]
+
+  async function removeFromPosition(posId: string, memberId: string) {
+    if (!confirm('¿Quitar esta persona de la posición?')) return
+    const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}/positions/${posId}/members/${memberId}`, { method: 'DELETE' })
+    if (r.ok) onChanged()
+  }
+  async function removeLeader(memberId: string) {
+    if (!confirm('¿Quitar a este líder?')) return
+    const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}/leaders/${memberId}`, { method: 'DELETE' })
+    if (r.ok) onChanged()
+  }
+  async function removePosition(posId: string) {
+    if (!confirm('¿Eliminar esta posición y todos sus miembros?')) return
+    const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}/positions/${posId}`, { method: 'DELETE' })
+    if (r.ok) { onChanged(); setView('all') }
+  }
+  function printPDF() {
+    const title = view === 'leaders' ? 'Líderes del equipo' : view === 'all' ? 'Todos los miembros del equipo' : (positions.find(p => p.id === view)?.name || 'Miembros') + ' · miembros'
+    const html = `<html><head><title>${title} — ${team.name}</title><style>body{font-family:Geist,system-ui,sans-serif;padding:32px;color:#111}h1{font-size:22px;margin:0 0 6px}h2{font-size:14px;color:#666;margin:0 0 24px;font-weight:400}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #eee}th{font-weight:600;color:#666;font-size:11px;text-transform:uppercase;letter-spacing:.08em}</style></head><body><h1>${team.name}</h1><h2>${title}</h2><table><thead><tr><th>Nombre</th><th>Apellido</th><th>Email</th></tr></thead><tbody>${activeRows.map(m => { const fn = m.full_name || m.email; const [f, ...r] = fn.split(' '); return `<tr><td>${f}</td><td>${r.join(' ')}</td><td>${m.email}</td></tr>` }).join('')}</tbody></table></body></html>`
+    const w = window.open('', '_blank'); if (!w) return
+    w.document.write(html); w.document.close(); setTimeout(() => w.print(), 250)
+  }
+
+  const isLeadersView = view === 'leaders'
+  const isPositionView = !!positions.find(p => p.id === view)
+  const currentPos = positions.find(p => p.id === view) || null
+
+  return (
+    <div className="grid grid-12 rise rise-d2">
+      <aside className="col-3">
+        <div className="card" style={{ padding: 8 }}>
+          <NavItem label="Todos los miembros" n={allMembers.length} active={view === 'all'} onClick={() => setView('all')} />
+          <NavItem label="Líderes" n={leaders.length} active={view === 'leaders'} onClick={() => setView('leaders')} />
+          <div style={{ padding: '12px 12px 6px', fontSize: 10, fontWeight: 700, letterSpacing: 0.12, textTransform: 'uppercase', color: 'var(--text-4)' }}>Posiciones</div>
+          {positions.map(pos => (
+            <NavItem key={pos.id} label={pos.name} n={(pos.members || []).length} active={view === pos.id} onClick={() => setView(pos.id)} />
+          ))}
+          <button onClick={() => setAddPosOpen(true)} style={{
+            width: '100%', margin: '6px 0 0', padding: '10px 12px',
+            border: '1.5px dashed var(--hairline)', borderRadius: 10, background: 'transparent',
+            color: 'var(--text-3)', fontSize: 12.5, fontWeight: 600, textAlign: 'left', cursor: 'pointer',
+          }}>+ Añadir posición</button>
+        </div>
+      </aside>
+
+      <section className="col-9 card">
+        <div className="card-head">
+          <div className="card-title">
+            {isLeadersView ? 'Líderes del equipo' : view === 'all' ? 'Todos los miembros del equipo' : `${currentPos?.name} · miembros`}
+          </div>
+          <div className="row" style={{ gap: 6 }}>
+            <button className="icon-btn" title="Enviar correo" onClick={() => setBulkEmail(activeRows)} disabled={activeRows.length === 0}><I.Send size={14}/></button>
+            <button className="icon-btn" title="Imprimir / PDF" onClick={printPDF} disabled={activeRows.length === 0}><I.Doc size={14}/></button>
+            {isLeadersView && <button className="icon-btn" title="Añadir líder" onClick={() => setAddLeaderOpen(true)}><I.Plus size={14}/></button>}
+            {isPositionView && currentPos && <button className="icon-btn" title="Añadir miembro" onClick={() => setAddToPos(currentPos)}><I.Plus size={14}/></button>}
+            {isPositionView && currentPos && <button className="icon-btn" title="Eliminar posición" onClick={() => removePosition(currentPos.id)}><I.Trash size={14}/></button>}
+          </div>
+        </div>
+        {activeRows.length === 0 ? (
+          <div style={{ padding: '40px 24px', textAlign: 'center', fontSize: 13, color: 'var(--text-3)' }}>
+            {isLeadersView ? 'Este equipo aún no tiene líderes.' : isPositionView ? 'Esta posición aún no tiene miembros.' : 'Este equipo aún no tiene miembros.'}
+          </div>
+        ) : (
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>Nombre</th>
+                <th>Apellido</th>
+                <th>Email</th>
+                <th>Preferencias</th>
+                <th style={{ width: 56, textAlign: 'right' }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {activeRows.map((m, idx) => {
+                const fn = m.full_name || m.email
+                const [first, ...rest] = String(fn).split(' ')
+                const c = ((String(m.member_id || idx).split('').reduce((a, ch) => a + ch.charCodeAt(0), 0)) % 8) + 1
+                const canDelete = isLeadersView ? (leaders.length > 1 && m.member_id !== currentMemberId) : isPositionView
+                return (
+                  <tr key={m.member_id + idx} style={{ cursor: 'pointer' }} onClick={() => onOpenPerson(m.member_id)}>
+                    <td>
+                      <div className="row" style={{ gap: 10 }}>
+                        <div className="av av-sm" data-c={c}>{teamInitials(fn)}</div>
+                        <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{first}</span>
+                      </div>
+                    </td>
+                    <td style={{ color: 'var(--text-2)' }}>{rest.join(' ')}</td>
+                    <td className="mono" style={{ fontSize: 12.5, color: 'var(--text-2)' }}>{m.email}</td>
+                    <td style={{ color: 'var(--text-3)', fontSize: 12.5 }}>{m.preferences?.max_per_month ? `Máx. ${m.preferences.max_per_month}/mes` : 'Sin límite'}</td>
+                    <td style={{ textAlign: 'right' }} onClick={e => e.stopPropagation()}>
+                      {canDelete && (
+                        <button className="icon-btn" title="Quitar"
+                          onClick={() => isLeadersView ? removeLeader(m.member_id) : currentPos && removeFromPosition(currentPos.id, m.member_id)}>
+                          <I.X size={13}/>
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      {addPosOpen && (
+        <AddPositionModal slug={slug} teamId={team.id}
+          existingNames={positions.map(p => p.name)}
+          onCreated={() => { setAddPosOpen(false); onChanged() }}
+          onClose={() => setAddPosOpen(false)}/>
+      )}
+      {addLeaderOpen && (
+        <AddLeaderModal slug={slug} teamId={team.id} orgMembers={orgMembers}
+          excludedIds={new Set(leaders.map(l => l.member_id))}
+          onAdded={() => { setAddLeaderOpen(false); onChanged() }}
+          onClose={() => setAddLeaderOpen(false)}/>
+      )}
+      {addToPos && (
+        <AddPersonsToPositionModal slug={slug} teamId={team.id} position={addToPos}
+          orgMembers={orgMembers}
+          serviceMemberIds={new Set(allMembers.map(m => m.member_id))}
+          excludedIds={new Set((addToPos.members || []).map((m: any) => m.member_id))}
+          onDone={() => { setAddToPos(null); onChanged() }}
+          onClose={() => setAddToPos(null)}/>
+      )}
+      {bulkEmail && (
+        <TeamBulkEmailModal slug={slug} recipients={bulkEmail} teamId={team.id}
+          onClose={() => setBulkEmail(null)} onSent={() => setBulkEmail(null)}/>
+      )}
+    </div>
+  )
+}
+
+function CfgCard({ icon: Icon, title, children }: { icon: (p: any) => JSX.Element; title: string; children: React.ReactNode }) {
+  return (
+    <div className="card" style={{ padding: 20 }}>
+      <div className="row" style={{ gap: 8, marginBottom: 16 }}>
+        <Icon size={15} style={{ color: 'var(--accent)' }} />
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.1, textTransform: 'uppercase', color: 'var(--text-3)' }}>{title}</span>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function CfgRow({ title, sub, right, last }: { title: string; sub: string; right: React.ReactNode; last?: boolean }) {
+  return (
+    <div className="row-between" style={{ padding: '12px 0', borderBottom: last ? 0 : '1px solid var(--separator)', gap: 16 }}>
+      <div>
+        <div style={{ fontSize: 13.5, fontWeight: 600 }}>{title}</div>
+        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>{sub}</div>
+      </div>
+      <div style={{ flexShrink: 0 }}>{right}</div>
+    </div>
+  )
+}
+
+function Toggle({ on }: { on?: boolean }) {
+  return (
+    <div style={{
+      width: 40, height: 23, borderRadius: 999, padding: 2, cursor: 'pointer',
+      background: on ? 'var(--accent)' : 'var(--surface-3)', transition: 'background 200ms',
+      display: 'flex', justifyContent: on ? 'flex-end' : 'flex-start',
+    }}>
+      <div style={{ width: 19, height: 19, borderRadius: 999, background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.25)' }} />
+    </div>
+  )
+}
+
+function RadioCard({ icon: Icon, title, sub, checked }: { icon?: (p: any) => JSX.Element; title: string; sub: string; checked?: boolean }) {
+  return (
+    <div style={{
+      display: 'flex', gap: 12, padding: 14, borderRadius: 12, cursor: 'pointer',
+      border: '1.5px solid ' + (checked ? 'var(--accent)' : 'var(--separator)'),
+      background: checked ? 'var(--accent-tint)' : 'var(--surface)',
+      transition: 'border-color 160ms, background 160ms',
+    }}>
+      <div style={{
+        width: 18, height: 18, borderRadius: Icon ? 5 : 999, flexShrink: 0, marginTop: 1,
+        border: '2px solid ' + (checked ? 'var(--accent)' : 'var(--hairline)'),
+        background: checked ? 'var(--accent)' : 'transparent',
+        display: 'grid', placeItems: 'center',
+      }}>
+        {checked && (Icon
+          ? <I.Check size={11} {...{ style: { color: '#fff' } } as any}/>
+          : <span style={{ width: 7, height: 7, borderRadius: 99, background: '#fff' }} />)}
+      </div>
+      <div>
+        <div className="row" style={{ gap: 7 }}>
+          {Icon && <Icon size={14} style={{ color: 'var(--text-2)' }} />}
+          <span style={{ fontSize: 13.5, fontWeight: 600 }}>{title}</span>
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 3, lineHeight: 1.45 }}>{sub}</div>
+      </div>
+    </div>
+  )
+}
+
+type TeamType = 'rehearsal' | 'secure' | 'split'
+type DefStatus = 'C' | 'U'
+type RepliesTo = 'all_leaders' | 'all_admins' | 'team_leader'
+type LastDateRule = 'service_type' | 'any' | 'team' | 'position'
+type ViewerAccess = 'plan_full' | 'plan_basic' | 'none'
+type RescheduleKind = 'manual' | 'no_reschedule' | 'volunteer' | 'auto_schedule' | 'signup_sheet'
+
+function EquipoConfig({ slug, team, allTeams, types, detail, onChanged, onDeleted }: {
+  slug: string; team: Team; allTeams: Team[]; types: ServiceType[]; detail: TeamDetailPayload | null;
+  onChanged: () => void; onDeleted: () => void;
+}) {
+  const teamType: TeamType = team.is_split ? 'split' : team.is_secure ? 'secure' : 'rehearsal'
+  const [type, setType] = useState<TeamType>(teamType)
+  const [defStatus, setDefStatus] = useState<DefStatus>(team.default_status === 'C' ? 'C' : 'U')
+  const [notify, setNotify] = useState<boolean>(team.notify_on_prepare !== false)
+  const [repliesTo, setRepliesTo] = useState<RepliesTo>((team.replies_to as RepliesTo) || 'all_leaders')
+  const [gapAlerts, setGapAlerts] = useState<boolean>(!!team.gap_alerts_enabled)
+  const [lastDateRule, setLastDateRule] = useState<LastDateRule>((team.last_scheduled_date_rule as LastDateRule) || 'service_type')
+  const [viewerAccess, setViewerAccess] = useState<ViewerAccess>((team.scheduled_viewer_access as ViewerAccess) || 'plan_full')
+  const [signupAuto, setSignupAuto] = useState<boolean>(!!team.signup_sheets_auto_enable)
+  const [reschedule, setReschedule] = useState<RescheduleKind>((team.reschedule_on_decline as RescheduleKind) || 'manual')
+  const [typeIds, setTypeIds] = useState<string[]>(detail?.team?.service_type_ids || team.service_type_ids || [])
+  const [relatedIds, setRelatedIds] = useState<string[]>(detail?.team?.related_team_ids || team.related_team_ids || [])
+  const [saving, setSaving] = useState(false)
+  const [pickTypeOpen, setPickTypeOpen] = useState(false)
+  const [pickRelatedOpen, setPickRelatedOpen] = useState(false)
+  const [defStatusOpen, setDefStatusOpen] = useState(false)
+  const [repliesOpen, setRepliesOpen] = useState(false)
+  const [lastDateOpen, setLastDateOpen] = useState(false)
+  const [viewerOpen, setViewerOpen] = useState(false)
+
+  useEffect(() => {
+    if (!detail?.team) return
+    setTypeIds(detail.team.service_type_ids || [])
+    setRelatedIds(detail.team.related_team_ids || [])
+  }, [detail])
+
+  const initial = {
+    type: teamType, defStatus: team.default_status === 'C' ? 'C' : 'U', notify: team.notify_on_prepare !== false,
+    repliesTo: team.replies_to || 'all_leaders', gapAlerts: !!team.gap_alerts_enabled,
+    lastDateRule: team.last_scheduled_date_rule || 'service_type', viewerAccess: team.scheduled_viewer_access || 'plan_full',
+    signupAuto: !!team.signup_sheets_auto_enable, reschedule: team.reschedule_on_decline || 'manual',
+    typeIds: (detail?.team?.service_type_ids || team.service_type_ids || []).join(','),
+    relatedIds: (detail?.team?.related_team_ids || team.related_team_ids || []).join(','),
+  }
+  const cur = { type, defStatus, notify, repliesTo, gapAlerts, lastDateRule, viewerAccess, signupAuto, reschedule, typeIds: typeIds.join(','), relatedIds: relatedIds.join(',') }
+  const dirty = JSON.stringify(initial) !== JSON.stringify(cur)
+
+  async function save() {
+    if (typeIds.length === 0) { alert('Selecciona al menos un tipo de servicio.'); return }
+    setSaving(true)
+    try {
+      const body = {
+        is_rehearsal: type === 'rehearsal', is_secure: type === 'secure', is_split: type === 'split',
+        default_status: defStatus, notify_on_prepare: notify, replies_to: repliesTo,
+        gap_alerts_enabled: gapAlerts, last_scheduled_date_rule: lastDateRule,
+        scheduled_viewer_access: viewerAccess, signup_sheets_auto_enable: signupAuto,
+        reschedule_on_decline: reschedule, service_type_ids: typeIds, related_team_ids: relatedIds,
+      }
+      const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      })
+      if (r.ok) onChanged()
+      else { const j = await r.json().catch(() => ({} as any)); alert(j.detail || 'Error') }
+    } finally { setSaving(false) }
+  }
+
+  async function del() {
+    if (!confirm(`¿Eliminar el equipo "${team.name}"? Esta acción es irreversible.`)) return
+    const r = await api(`/api/v1/tenant/${slug}/teams/${team.id}`, { method: 'DELETE' })
+    if (r.ok) onDeleted()
+    else { const j = await r.json().catch(() => ({} as any)); alert(j.detail || 'Error') }
+  }
+
+  const DEF_STATUS_LABEL: Record<DefStatus, string> = { C: 'Confirmado', U: 'No confirmado' }
+  const REPLIES_LABEL: Record<RepliesTo, string> = { all_leaders: 'Todos los líderes', all_admins: 'Todos los admin', team_leader: 'Solo líder del equipo' }
+  const LAST_DATE_LABEL: Record<LastDateRule, string> = { service_type: 'Tipo de servicio', any: 'Cualquier sitio', team: 'Este equipo', position: 'Esta posición' }
+  const VIEWER_LABEL: Record<ViewerAccess, string> = { plan_full: 'Plan completo', plan_basic: 'Plan básico', none: 'Sin acceso' }
+
+  return (
+    <div className="rise rise-d2">
+      <div className="grid grid-12" style={{ gap: 'var(--gap)' }}>
+        <div className="col-6">
+          <CfgCard icon={I.Settings} title="Tipo de equipo">
+            <div className="stack" style={{ gap: 10 }}>
+              <div onClick={() => setType('rehearsal')}><RadioCard icon={I.Music} title="Equipo de ensayo" sub="Acceso a canciones, partituras y archivos de media del servicio." checked={type === 'rehearsal'} /></div>
+              <div onClick={() => setType('secure')}><RadioCard icon={I.Lock} title="Equipo seguro" sub="Sólo personas con verificación de antecedentes podrán ser asignadas." checked={type === 'secure'} /></div>
+              <div onClick={() => setType('split')}><RadioCard icon={I.People} title="Equipo dividido" sub="Permite distintas personas por franja cuando hay varios servicios el mismo día." checked={type === 'split'} /></div>
+            </div>
+          </CfgCard>
+        </div>
+        <div className="col-6">
+          <CfgCard icon={I.Cal} title="Valores predeterminados de programación">
+            <CfgRow title="Estado predeterminado" sub="Al crear un nuevo plan" right={
+              <DropdownPicker open={defStatusOpen} setOpen={setDefStatusOpen} label={DEF_STATUS_LABEL[defStatus]}
+                options={[['C', 'Confirmado'], ['U', 'No confirmado']]} onPick={v => setDefStatus(v as DefStatus)} value={defStatus}/>
+            } />
+            <CfgRow title="Notificar al preparar plan" sub="Enviar alerta cuando el plan esté listo" right={<div onClick={() => setNotify(n => !n)}><Toggle on={notify}/></div>} />
+            <CfgRow title="Respuestas van a" sub="Destinatarios de las respuestas" right={
+              <DropdownPicker open={repliesOpen} setOpen={setRepliesOpen} label={REPLIES_LABEL[repliesTo]}
+                options={Object.entries(REPLIES_LABEL)} onPick={v => setRepliesTo(v as RepliesTo)} value={repliesTo}/>
+            } last />
+          </CfgCard>
+        </div>
+        <div className="col-6">
+          <CfgCard icon={I.Bell} title="Alertas de huecos en programación">
+            <CfgRow title="Activar alertas de huecos" sub="Avisar al líder y a la persona cuando no se confirme antes de la fecha límite" right={<div onClick={() => setGapAlerts(g => !g)}><Toggle on={gapAlerts}/></div>} last />
+          </CfgCard>
+        </div>
+        <div className="col-6">
+          <CfgCard icon={I.Filter} title="Opciones">
+            <CfgRow title="Última fecha programada" sub="Cómo se registra la fecha de servicio" right={
+              <DropdownPicker open={lastDateOpen} setOpen={setLastDateOpen} label={LAST_DATE_LABEL[lastDateRule]}
+                options={Object.entries(LAST_DATE_LABEL)} onPick={v => setLastDateRule(v as LastDateRule)} value={lastDateRule}/>
+            } />
+            <CfgRow title="Acceso de espectadores" sub="Qué ve un miembro como espectador" right={
+              <DropdownPicker open={viewerOpen} setOpen={setViewerOpen} label={VIEWER_LABEL[viewerAccess]}
+                options={Object.entries(VIEWER_LABEL)} onPick={v => setViewerAccess(v as ViewerAccess)} value={viewerAccess}/>
+            } />
+            <CfgRow title="Hojas de inscripción auto." sub="Activar para nuevos planes" right={<div onClick={() => setSignupAuto(s => !s)}><Toggle on={signupAuto}/></div>} last />
+          </CfgCard>
+        </div>
+        <div className="col-6">
+          <CfgCard icon={I.Folder} title="Tipos de servicio">
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.45 }}>
+              En qué tipos de servicio participa este equipo. <b style={{ color: 'var(--text-2)' }}>Mínimo 1 requerido.</b>
+            </div>
+            <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+              {typeIds.map(id => {
+                const t = types.find(x => x.id === id)
+                return <span key={id} className="pill-tone tone-blue" style={{ cursor: 'pointer' }} onClick={() => setTypeIds(prev => prev.filter(x => x !== id))}>{t?.name || '—'} <I.X size={11}/></span>
+              })}
+            </div>
+            <div style={{ position: 'relative' }}>
+              <button className="btn btn-secondary btn-sm" onClick={() => setPickTypeOpen(o => !o)}><I.Plus size={12}/> Añadir tipo</button>
+              {pickTypeOpen && (
+                <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 30, background: 'var(--surface)', border: '1px solid var(--separator)', borderRadius: 10, boxShadow: 'var(--shadow-2)', padding: 6, minWidth: 240, maxHeight: 280, overflow: 'auto' }}>
+                  {types.filter(t => !typeIds.includes(t.id)).length === 0
+                    ? <div style={{ padding: 12, fontSize: 12, color: 'var(--text-3)' }}>No quedan tipos disponibles.</div>
+                    : types.filter(t => !typeIds.includes(t.id)).map(t => (
+                      <button key={t.id} onClick={() => { setTypeIds(prev => [...prev, t.id]); setPickTypeOpen(false) }} style={{ width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: 8, background: 'transparent', border: 0, cursor: 'pointer', fontSize: 13 }}>{t.name}</button>
+                    ))}
+                </div>
+              )}
+            </div>
+          </CfgCard>
+        </div>
+        <div className="col-6">
+          <CfgCard icon={I.People} title="Equipos relacionados">
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.45 }}>
+              Cuando los miembros usen el filtro <b style={{ color: 'var(--text-2)' }}>Mis equipos</b>, también se incluirán estos equipos.
+            </div>
+            {relatedIds.length === 0
+              ? <div style={{ fontSize: 13, color: 'var(--text-4)', fontStyle: 'italic', marginBottom: 12 }}>Sin equipos relacionados</div>
+              : <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+                  {relatedIds.map(id => {
+                    const t = allTeams.find(x => x.id === id)
+                    return <span key={id} className="pill-tone tone-violet" style={{ cursor: 'pointer' }} onClick={() => setRelatedIds(prev => prev.filter(x => x !== id))}>{t?.name || '—'} <I.X size={11}/></span>
+                  })}
+                </div>
+            }
+            <div style={{ position: 'relative' }}>
+              <button className="btn btn-secondary btn-sm" onClick={() => setPickRelatedOpen(o => !o)}><I.Plus size={12}/> Añadir equipo</button>
+              {pickRelatedOpen && (
+                <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 30, background: 'var(--surface)', border: '1px solid var(--separator)', borderRadius: 10, boxShadow: 'var(--shadow-2)', padding: 6, minWidth: 240, maxHeight: 280, overflow: 'auto' }}>
+                  {allTeams.filter(t => t.id !== team.id && !relatedIds.includes(t.id)).length === 0
+                    ? <div style={{ padding: 12, fontSize: 12, color: 'var(--text-3)' }}>No quedan equipos disponibles.</div>
+                    : allTeams.filter(t => t.id !== team.id && !relatedIds.includes(t.id)).map(t => (
+                      <button key={t.id} onClick={() => { setRelatedIds(prev => [...prev, t.id]); setPickRelatedOpen(false) }} style={{ width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: 8, background: 'transparent', border: 0, cursor: 'pointer', fontSize: 13 }}>{t.name}</button>
+                    ))}
+                </div>
+              )}
+            </div>
+          </CfgCard>
+        </div>
+        <div className="col-12">
+          <CfgCard icon={I.Sort} title="Reagendado de rechazos">
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 14 }}>
+              Cuando alguien rechaza una solicitud, ¿cómo debería ser reagendado?
+            </div>
+            <div className="grid grid-12" style={{ gap: 12 }}>
+              <div className="col-6" onClick={() => setReschedule('no_reschedule')}><RadioCard title="No reagendar" sub="Los rechazos no generan ninguna acción" checked={reschedule === 'no_reschedule'} /></div>
+              <div className="col-6" onClick={() => setReschedule('manual')}><RadioCard title="Reagendar manualmente" sub="Se crea una posición necesaria para asignar" checked={reschedule === 'manual'} /></div>
+              <div className="col-6" onClick={() => setReschedule('volunteer')}><RadioCard title="Reemplazo voluntario" sub="La persona programada elige su sustituto" checked={reschedule === 'volunteer'} /></div>
+              <div className="col-6" onClick={() => setReschedule('auto_schedule')}><RadioCard title="Auto-agenda" sub="El siguiente candidato recibe solicitud automática" checked={reschedule === 'auto_schedule'} /></div>
+              <div className="col-6" onClick={() => setReschedule('signup_sheet')}><RadioCard title="Hoja de inscripción" sub="La posición abre en la hoja del equipo" checked={reschedule === 'signup_sheet'} /></div>
+            </div>
+          </CfgCard>
+        </div>
+      </div>
+
+      <div className="row-between" style={{ marginTop: 'var(--gap)' }}>
+        <button className="btn btn-secondary" style={{ color: 'var(--danger)', borderColor: 'color-mix(in oklab, var(--danger) 30%, transparent)' }} onClick={del}>
+          <I.Trash size={14}/> Eliminar equipo
+        </button>
+        <div className="row" style={{ gap: 10 }}>
+          {dirty && <span style={{ fontSize: 12, color: 'var(--warning)', fontWeight: 600 }}>Cambios sin guardar</span>}
+          <button className="btn btn-primary" disabled={!dirty || saving} onClick={save}><I.Check size={14}/> {saving ? 'Guardando…' : 'Guardar cambios'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DropdownPicker({ open, setOpen, label, options, onPick, value }: {
+  open: boolean; setOpen: (o: boolean) => void; label: string;
+  options: [string, string][]; onPick: (v: string) => void; value: string;
+}) {
+  return (
+    <div style={{ position: 'relative' }}>
+      <button className="btn btn-secondary btn-sm" onClick={() => setOpen(!open)}>{label} <I.ChevDown size={11}/></button>
+      {open && (
+        <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 30, background: 'var(--surface)', border: '1px solid var(--separator)', borderRadius: 10, boxShadow: 'var(--shadow-2)', padding: 6, minWidth: 200 }}>
+          {options.map(([v, l]) => (
+            <button key={v} onClick={() => { onPick(v); setOpen(false) }} style={{
+              width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: 8,
+              background: v === value ? 'var(--accent-tint)' : 'transparent',
+              color: v === value ? 'var(--accent)' : 'var(--text)',
+              border: 0, cursor: 'pointer', fontSize: 13,
+            }}>{l}</button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -1989,10 +3089,9 @@ export default function Servicios({ tab, resetSignal }: { tab: ServiciosTab; res
   const [drill, setDrill] = useState<'plan' | 'song' | null>(null)
   useEffect(() => { setSelectedPerson(null); setSelectedTeam(null); setDrill(null) }, [tab, resetSignal])
 
-  // Shared data needed by legacy PersonDetailView + TeamDetailView
-  const [allTeams, setAllTeams] = useState<any[]>([])
-  const [orgMembers, setOrgMembers] = useState<any[]>([])
-  const [allTypes, setAllTypes] = useState<any[]>([])
+  const [allTeams, setAllTeams] = useState<Team[]>([])
+  const [orgMembers, setOrgMembers] = useState<OrgMemberLite[]>([])
+  const [allTypes, setAllTypes] = useState<ServiceType[]>([])
   const [currentMemberId, setCurrentMemberId] = useState<string | null>(null)
   const reloadSharedData = React.useCallback(() => {
     if (!slug) return
@@ -2037,19 +3136,19 @@ export default function Servicios({ tab, resetSignal }: { tab: ServiciosTab; res
           {tab === 'media' && <Media/>}
           {tab === 'personas' && (
             selectedPerson
-              ? <LegacyPersonDetailView slug={slug!} person={selectedPerson} allTeams={allTeams}
+              ? <PersonaDetail slug={slug!} person={selectedPerson} allTeams={allTeams}
                   onBack={() => setSelectedPerson(null)}
-                  onChanged={(p: any) => setSelectedPerson(p)} />
+                  onChanged={(p: ServicePerson) => setSelectedPerson(p)}/>
               : selectedTeam
-                ? <LegacyTeamDetailView slug={slug!} team={selectedTeam} allTeams={allTeams}
+                ? <EquipoDetail slug={slug!} team={selectedTeam} allTeams={allTeams}
                     orgMembers={orgMembers} types={allTypes} currentMemberId={currentMemberId}
                     onBack={() => setSelectedTeam(null)}
-                    onTeamChanged={(t: any) => { setSelectedTeam(t); reloadSharedData() }}
+                    onTeamChanged={(t: Team) => { setSelectedTeam(t); reloadSharedData() }}
                     onTeamDeleted={() => { setSelectedTeam(null); reloadSharedData() }}
                     onPeopleInvalidate={reloadSharedData}
-                    onOpenPerson={(smId: string) => {
+                    onOpenPerson={(memberId: string) => {
                       api(`/api/v1/tenant/${slug}/services/people`).then(r => r.ok ? r.json() : []).then((ppl: any[]) => {
-                        const p = ppl.find(x => x.id === smId)
+                        const p = ppl.find(x => x.member_id === memberId || x.id === memberId)
                         if (p) { setSelectedTeam(null); setSelectedPerson(p) }
                       })
                     }} />

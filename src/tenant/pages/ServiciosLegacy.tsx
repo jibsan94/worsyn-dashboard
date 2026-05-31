@@ -62,7 +62,7 @@ interface ServiceTime {
   weekday?: number
   sort_order?: number
 }
-interface ServiceType {
+export interface ServiceType {
   id: string
   name: string
   color: string | null
@@ -73,7 +73,7 @@ interface ServiceType {
   team_ids: string[]
 }
 interface ServicePlan { id: string; title: string; status: string; scheduled_at: string | null; service_type_id: string | null }
-interface Team {
+export interface Team {
   id: string
   name: string
   color: string | null
@@ -819,7 +819,7 @@ function WelcomeView({ onCreate }: { onCreate: () => void }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Personas — Teams CRUD section
 // ─────────────────────────────────────────────────────────────────────────────
-function TeamFormModal({ slug, initial, orgMembers, types, currentMemberId, onSaved, onClose }: {
+export function TeamFormModal({ slug, initial, orgMembers, types, currentMemberId, onSaved, onClose }: {
   slug: string
   initial?: Team | null
   orgMembers: OrgMemberLite[]
@@ -1059,12 +1059,12 @@ function TeamFormModal({ slug, initial, orgMembers, types, currentMemberId, onSa
 }
 
 // ── Service People types ────────────────────────────────────────────────────
-type ServiceRole = 'administrator' | 'editor' | 'coordinator' | 'viewer' | 'scheduled_viewer'
-type AreaRole = 'administrator' | 'editor' | 'viewer' | 'scheduled_viewer'
+export type ServiceRole = 'administrator' | 'editor' | 'coordinator' | 'viewer' | 'scheduled_viewer'
+export type AreaRole = 'administrator' | 'editor' | 'viewer' | 'scheduled_viewer'
 
-interface OrgMemberLite { id: string; full_name: string | null; email: string; avatar?: string | null; role?: string }
-interface TypePerm { service_type_id: string; role: ServiceRole | null }
-interface ServicePerson {
+export interface OrgMemberLite { id: string; full_name: string | null; email: string; avatar?: string | null; role?: string }
+export interface TypePerm { service_type_id: string; role: ServiceRole | null }
+export interface ServicePerson {
   id: string
   member_id: string
   full_name: string | null
@@ -1086,12 +1086,12 @@ interface ServicePerson {
   debug_password?: string | null   // TEST-ONLY — remove before prod
 }
 
-type EmailKind = 'general' | 'schedule' | 'signup' | 'welcome' | 'team_welcome'
+export type EmailKind = 'general' | 'schedule' | 'signup' | 'welcome' | 'team_welcome'
 interface EmailTemplate {
   id: string; kind: EmailKind; name: string; subject: string; body: string;
   is_default: boolean; created_at: string; updated_at: string | null
 }
-interface EmailMessage {
+export interface EmailMessage {
   id: string; direction: 'sent' | 'received'; status: string;
   subject: string; body: string;
   recipient_email: string; sender_email: string | null;
@@ -1140,7 +1140,7 @@ const VARIABLE_GROUPS: { label: string; vars: { token: string; hint: string }[] 
   ]},
 ]
 
-interface PersonTeam { membership_id: string; team_id: string; team_name: string; team_color: string | null; role: string | null }
+export interface PersonTeam { membership_id: string; team_id: string; team_name: string; team_color: string | null; role: string | null }
 
 const SERVICE_ROLE_LABEL: Record<ServiceRole, string> = {
   administrator: 'Administrador',
@@ -1552,7 +1552,7 @@ function AddPersonWizard({ slug, types, orgMembers, existingMemberIds, onCreated
 // Blockouts — types + modal + projection
 // ─────────────────────────────────────────────────────────────────────────────
 type RepeatKind = 'none' | 'day' | 'week' | 'month' | 'year'
-interface Blockout {
+export interface Blockout {
   id: string
   start_date: string  // YYYY-MM-DD
   end_date: string
@@ -1583,7 +1583,7 @@ function blockoutLabel(b: Blockout): string {
   return `${range} · ${cada} ${unit} ${tail}`
 }
 
-function BlockoutModal({ slug, smId, initial, onSaved, onClose }: {
+export function BlockoutModal({ slug, smId, initial, onSaved, onClose }: {
   slug: string
   smId: string
   initial?: Blockout
@@ -2202,7 +2202,7 @@ const RichTextEditor = React.forwardRef<RichTextEditorHandle, {
   )
 })
 
-function ComposeEmailModal({ slug, defaultRecipient, autoApplyKind, contextTeamId, onClose, onSent }: {
+export function ComposeEmailModal({ slug, defaultRecipient, autoApplyKind, contextTeamId, onClose, onSent }: {
   slug: string
   defaultRecipient: ServicePerson
   autoApplyKind?: EmailKind
@@ -2361,7 +2361,7 @@ function ComposeEmailModal({ slug, defaultRecipient, autoApplyKind, contextTeamI
   )
 }
 
-function TemplatesManagerModal({ slug, onClose }: { slug: string; onClose: () => void }) {
+export function TemplatesManagerModal({ slug, onClose }: { slug: string; onClose: () => void }) {
   const [kind, setKind] = useState<EmailKind>('general')
   const [templates, setTemplates] = useState<EmailTemplate[]>([])
   const [editing, setEditing] = useState<EmailTemplate | null | undefined>(undefined) // undefined closed, null create
@@ -3963,21 +3963,21 @@ function PersonasView({ slug, teams, setTeams, types, resetSignal }: {
 // Team Detail View — tabs (Settings / Members / Automations) + positions
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface TeamPerson {
+export interface TeamPerson {
   member_id: string
   full_name: string | null
   email: string
   avatar: string | null
   preferences: { max_per_month: number | null; max_per_day: number | null }
 }
-interface TeamPositionInfo {
+export interface TeamPositionInfo {
   id: string
   name: string
   sort_order: number
   member_count: number
   members: TeamPerson[]
 }
-interface TeamDetailPayload {
+export interface TeamDetailPayload {
   team: Team
   leaders: TeamPerson[]
   positions: TeamPositionInfo[]
@@ -4068,7 +4068,7 @@ function IconBtn({ children, onClick, title, disabled, danger }: {
   )
 }
 
-function AddPositionModal({ slug, teamId, existingNames, onCreated, onClose }: {
+export function AddPositionModal({ slug, teamId, existingNames, onCreated, onClose }: {
   slug: string; teamId: string; existingNames: string[]
   onCreated: (p: TeamPositionInfo) => void; onClose: () => void
 }) {
@@ -4111,7 +4111,7 @@ function AddPositionModal({ slug, teamId, existingNames, onCreated, onClose }: {
   )
 }
 
-function AddLeaderModal({ slug, teamId, orgMembers, excludedIds, onAdded, onClose }: {
+export function AddLeaderModal({ slug, teamId, orgMembers, excludedIds, onAdded, onClose }: {
   slug: string; teamId: string
   orgMembers: OrgMemberLite[]
   excludedIds: Set<string>
@@ -4175,7 +4175,7 @@ function AddLeaderModal({ slug, teamId, orgMembers, excludedIds, onAdded, onClos
   )
 }
 
-function AddPersonsToPositionModal({ slug, teamId, position, orgMembers, serviceMemberIds, excludedIds, onDone, onClose }: {
+export function AddPersonsToPositionModal({ slug, teamId, position, orgMembers, serviceMemberIds, excludedIds, onDone, onClose }: {
   slug: string; teamId: string; position: TeamPositionInfo
   orgMembers: OrgMemberLite[]
   serviceMemberIds: Set<string>
@@ -4348,7 +4348,7 @@ function RecipientAdder({ slug, excludedIds, onPick }: {
   )
 }
 
-function TeamBulkEmailModal({ slug, recipients, teamId, onClose, onSent }: {
+export function TeamBulkEmailModal({ slug, recipients, teamId, onClose, onSent }: {
   slug: string; recipients: TeamPerson[]; teamId?: string
   onClose: () => void; onSent: () => void
 }) {

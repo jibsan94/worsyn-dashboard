@@ -925,6 +925,8 @@
 
 .tenant-v2 .col-8 { grid-column: span 8; }
 
+.tenant-v2 .col-9 { grid-column: span 9; }
+
 .tenant-v2 .col-12 { grid-column: span 12; }
 
 .tenant-v2 .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap); }
