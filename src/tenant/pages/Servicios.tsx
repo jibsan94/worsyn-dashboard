@@ -7,10 +7,11 @@
 // Real `/api/v1/tenant/{slug}/...` endpoints wired where they exist; the prototype's
 // mock data fills the rest until the matching backend lands.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useParams } from 'react-router-dom'
 import ServiciosLegacy, {
-  ComposeEmailModal, BlockoutModal, TeamFormModal, TeamBulkEmailModal,
+  BlockoutModal, TeamFormModal, TeamBulkEmailModal,
   AddPositionModal, AddLeaderModal, AddPersonsToPositionModal,
 } from './ServiciosLegacy'
 import type {
@@ -20,7 +21,7 @@ import type {
 import { I } from '../components/IconsV2'
 import '../styles/tenant.css'
 
-type ServiciosTab = 'mi-planificacion' | 'servicios' | 'canciones' | 'media' | 'personas' | 'legacy'
+type ServiciosTab = 'mi-planificacion' | 'servicios' | 'canciones' | 'media' | 'personas' | 'mensajes' | 'legacy'
 
 function api(path: string, init?: RequestInit): Promise<Response> {
   return fetch(path, { credentials: 'include', ...init })
@@ -77,9 +78,9 @@ const D = {
   songs: [
     { id: 's1', title: 'Maravilloso es', author: 'Marcos Witt', key: 'D', bpm: 78,  tags: ['Adoración'],   ccli: '7102351', updated: 'hace 2 días', plays: 124,
       arrangements: [
-        { id: 'a1-1', name: 'Original',           isOriginal: true,  by: 'Marcos Witt', key: 'D', bpm: 78, meter: '4/4', length: '4:38', sequence: 'I–V1–C–V2–C–P×2–C', files: ['Letra', 'Acordes', 'Multipista'] },
-        { id: 'a1-2', name: 'Versión dominical',  isOriginal: false, by: 'Lucía H.',    key: 'D', bpm: 74, meter: '4/4', length: '5:10', sequence: 'I–V1–C–V2–C–P', files: ['Letra', 'Acordes'] },
-        { id: 'a1-3', name: 'Acústico (Jóvenes)', isOriginal: false, by: 'Diego R.',    key: 'C', bpm: 72, meter: '4/4', length: '4:05', sequence: 'V1–C–P', files: ['Acordes'] },
+        { id: 'a1-1', name: 'Original',           isOriginal: true,  by: 'Marcos Witt', key: 'D', bpm: 78, meter: '4/4', length: '4:38', sequence: 'I–V1–C–V2–C–P×2–C', files: ['Letra', 'Acordes', 'Multipista'], prt: { name: 'Maravilloso es — Original.prt', by: 'Marcos Witt', when: 'hace 1 mes', slides: 8 } },
+        { id: 'a1-2', name: 'Versión dominical',  isOriginal: false, by: 'Lucía H.',    key: 'D', bpm: 74, meter: '4/4', length: '5:10', sequence: 'I–V1–C–V2–C–P', files: ['Letra', 'Acordes'], prt: { name: 'Maravilloso es — Dominical.prt', by: 'Lucía H.', when: 'hace 2 días', slides: 7 } },
+        { id: 'a1-3', name: 'Acústico (Jóvenes)', isOriginal: false, by: 'Diego R.',    key: 'C', bpm: 72, meter: '4/4', length: '4:05', sequence: 'V1–C–P', files: ['Acordes'], prt: null },
       ],
       lyrics: [
         { section: 'Verso 1', lines: ['Maravilloso es tu nombre', 'Cantaremos por siempre', 'De tu gracia sin medida', 'Renacemos cada día'] },
@@ -204,6 +205,42 @@ const D = {
       { id: 'h7', who: 'Lucía Hernández', c: 1, action: 'creó el plan',               detail: 'A partir de plantilla “Dominical”', when: '26 May · 10:00' },
     ],
   },
+  conversations: [
+    { id: 'c1', kind: 'team', name: 'Alabanza · Equipo A', c: 1, members: 6, unread: 3, when: '10:24',
+      preview: 'Diego: He subido el .prt de Inunda este lugar',
+      msgs: [
+        { who: 'Diego Ramírez', c: 7, t: '¿Confirmamos el ensayo del sábado a las 18:00?', when: 'Ayer 21:10' },
+        { who: 'Marta Soto', c: 3, t: 'Por mí perfecto 🙌', when: 'Ayer 21:14' },
+        { who: 'Javier Núñez', c: 5, t: 'Yo llego 18:30, vengo del trabajo', when: 'Ayer 21:20' },
+        { who: 'Diego Ramírez', c: 7, t: 'He subido el .prt de Inunda este lugar al arreglo espontáneo, revisad la secuencia', when: '10:24' },
+        { who: 'me', t: 'Genial, lo veo esta tarde y os digo', when: '10:26' },
+      ] },
+    { id: 'c2', kind: 'service', name: 'Servicio Dominical · 31 May', c: 4, members: 13, unread: 0, when: '09:40',
+      preview: 'Lucía: Recordad llegar 8:30 para soundcheck',
+      msgs: [
+        { who: 'Pastor Andrés', c: 3, t: 'Equipo, el mensaje será sobre Romanos 8, transición directa a Renuévame', when: 'Vie 18:02' },
+        { who: 'me', t: 'Recordad llegar 8:30 para soundcheck completo', when: '09:40' },
+        { who: 'Ana Vega', c: 2, t: 'Sonido listo, in-ears cargados ✅', when: '09:48' },
+      ] },
+    { id: 'c3', kind: 'group', name: 'Líderes', c: 3, members: 8, unread: 1, when: 'Ayer',
+      preview: 'Pastor Andrés: Reunión de líderes el martes',
+      msgs: [
+        { who: 'Pastor Andrés', c: 3, t: 'Reunión de líderes el martes a las 20:00 en sala 2', when: 'Ayer 17:30' },
+        { who: 'Noelia Pardo', c: 4, t: 'Allí estaré', when: 'Ayer 17:45' },
+      ] },
+    { id: 'c4', kind: 'direct', name: 'Diego Ramírez', c: 7, members: 2, unread: 0, when: '08:15',
+      preview: '¿Te paso la tonalidad en C?',
+      msgs: [
+        { who: 'Diego Ramírez', c: 7, t: '¿Te paso la tonalidad en C para Reckless Love?', when: '08:15' },
+        { who: 'me', t: 'Sí porfa, y el multitrack si lo tienes', when: '08:18' },
+      ] },
+    { id: 'c5', kind: 'direct', name: 'Marta Soto', c: 3, members: 2, unread: 2, when: 'Ayer',
+      preview: '¿Puedo hacer coros suaves en el espontáneo?',
+      msgs: [
+        { who: 'Marta Soto', c: 3, t: 'Hola Lucía 😊', when: 'Ayer 19:00' },
+        { who: 'Marta Soto', c: 3, t: '¿Puedo hacer coros suaves en el espontáneo del domingo?', when: 'Ayer 19:01' },
+      ] },
+  ] as Array<{ id: string; kind: 'team' | 'service' | 'group' | 'direct'; name: string; c: number; members: number; unread: number; when: string; preview: string; msgs: Array<{ who: string; c?: number; t: string; when: string }> }>,
 }
 
 const MEDIA_COLORS: Record<string, [string, string]> = {
@@ -250,17 +287,21 @@ function buildCal(year: number, month: number) {
 // ═════════════════════════════════════════════════════════════════════════════
 // SHELL — Sidebar + Topbar (port of shell.jsx)
 // ═════════════════════════════════════════════════════════════════════════════
-function Sidebar({ route, onNav, sb, onSbToggle, user, org }: {
+interface SidebarCounts { planificacion?: number; servicios?: number; canciones?: number; personas?: number; mensajes?: number }
+function Sidebar({ route, onNav, sb, onSbToggle, user, org, counts }: {
   route: ServiciosTab; onNav: (id: ServiciosTab) => void
   sb: 'full' | 'icons' | 'hidden'; onSbToggle: () => void
   user: { name: string; role: string; initials: string }; org: { name: string }
+  counts: SidebarCounts
 }) {
+  const fmt = (n?: number) => (typeof n === 'number' ? String(n) : undefined)
   const links: { id: ServiciosTab; label: string; icon: (p: { size?: number }) => JSX.Element; ind?: string }[] = [
-    { id: 'mi-planificacion', label: 'Mi planificación', icon: I.Home,  ind: '3' },
-    { id: 'servicios',        label: 'Servicios',        icon: I.Cal,   ind: '4' },
-    { id: 'canciones',        label: 'Canciones',        icon: I.Music, ind: '128' },
+    { id: 'mi-planificacion', label: 'Mi planificación', icon: I.Home,  ind: fmt(counts.planificacion) },
+    { id: 'servicios',        label: 'Servicios',        icon: I.Cal,   ind: fmt(counts.servicios) },
+    { id: 'canciones',        label: 'Canciones',        icon: I.Music, ind: fmt(counts.canciones) },
     { id: 'media',            label: 'Media',            icon: I.Photo },
-    { id: 'personas',         label: 'Personas',         icon: I.People, ind: '248' },
+    { id: 'personas',         label: 'Personas',         icon: I.People, ind: fmt(counts.personas) },
+    { id: 'mensajes',         label: 'Mensajes',         icon: I.Mail,  ind: fmt(counts.mensajes) },
   ]
   const secondary: { id: ServiciosTab; label: string; icon: (p: { size?: number }) => JSX.Element; ind?: string }[] = [
     { id: 'legacy', label: 'Vista antigua', icon: I.Eye },
@@ -623,13 +664,149 @@ function MiPlanificacion({ userFirstName, onOpenPlan }: { userFirstName: string;
 // ═════════════════════════════════════════════════════════════════════════════
 // SERVICIOS list (port screens-a.jsx::Servicios)
 // ═════════════════════════════════════════════════════════════════════════════
-function ServiciosList({ onOpenPlan }: { onOpenPlan: () => void }) {
-  const statusTone: Record<string, { c: string; bg: string }> = {
-    'Publicado':  { c: 'var(--success)', bg: 'var(--accent-2-tint)' },
-    'Borrador':   { c: 'var(--text-3)',  bg: 'var(--surface-3)' },
-    'Sin equipo': { c: 'var(--danger)',  bg: 'color-mix(in oklab, var(--danger) 14%, transparent)' },
-    'Reclutando': { c: 'var(--warning)', bg: 'color-mix(in oklab, var(--warning) 14%, transparent)' },
+const STATUS_LABEL: Record<string, { l: string; c: string; bg: string }> = {
+  draft:     { l: 'Borrador',  c: 'var(--text-3)', bg: 'var(--surface-3)' },
+  published: { l: 'Publicado', c: 'var(--success)', bg: 'var(--accent-2-tint)' },
+  completed: { l: 'Completado',c: 'var(--text-3)', bg: 'var(--surface-3)' },
+}
+const RECUR_LABEL: Record<string, string> = {
+  weekly: 'Semanal', biweekly: 'Cada 2 semanas', monthly: 'Mensual',
+  weekdays: 'Días laborables', daily: 'Diario', random: 'Aleatorio', none: 'Sin repetición',
+}
+const DOW_SHORT = ['LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB', 'DOM']
+const DOW_FULL = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+const MONTH_ABBR = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
+
+function formatPlanDate(iso: string | null) {
+  if (!iso) return { dow: '—', day: '—', month: '', time: '—', full: '—' }
+  const d = new Date(iso)
+  const dowIdx = (d.getDay() + 6) % 7  // JS: Sun=0 → make Monday=0
+  return {
+    dow: DOW_SHORT[dowIdx],
+    day: String(d.getDate()).padStart(2, '0'),
+    month: MONTH_ABBR[d.getMonth()],
+    time: `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`,
+    full: `${d.getDate()} ${MONTH_ABBR[d.getMonth()]}`,
   }
+}
+
+function recurrenceSubtitle(t: ServiceType): string {
+  const lbl = RECUR_LABEL[t.recurrence] || 'Semanal'
+  if (t.times && t.times.length > 0) {
+    const wdays = Array.from(new Set(t.times.map(x => x.weekday).filter((w): w is number => typeof w === 'number'))).sort()
+    if (wdays.length > 0 && (t.recurrence === 'weekly' || t.recurrence === 'biweekly' || t.recurrence === 'monthly')) {
+      const days = wdays.map(w => DOW_FULL[w]).join(' / ')
+      return `${lbl} · ${days}`
+    }
+  }
+  return lbl
+}
+
+function ServiceTypeCard({ type, plans, onOpenPlan, onNewPlan, onConfigure }: {
+  type: ServiceType
+  plans: { id: string; title: string; status: string; scheduled_at: string | null; service_type_id: string | null }[]
+  onOpenPlan: (planId: string) => void
+  onNewPlan: () => void
+  onConfigure: () => void
+}) {
+  const color = type.color || '#0A84FF'
+  const upcoming = plans
+    .filter(p => p.scheduled_at && new Date(p.scheduled_at) >= new Date(new Date().setHours(0, 0, 0, 0)))
+    .sort((a, b) => (a.scheduled_at || '').localeCompare(b.scheduled_at || ''))
+  const shown = upcoming.slice(0, 5)
+
+  return (
+    <article className="col-6 card" style={{ overflow: 'hidden' }}>
+      <div className="svc-ribbon" style={{ background: `linear-gradient(135deg, ${color}, color-mix(in oklab, ${color} 70%, #000))` }}>
+        <div className="svc-ribbon-deco"/>
+        <div className="svc-ribbon-deco b"/>
+        <div style={{ flex: 1, position: 'relative', zIndex: 2 }}>
+          <div className="svc-ribbon-sub">{recurrenceSubtitle(type)}</div>
+          <div className="svc-ribbon-title">{type.name}</div>
+        </div>
+        <div style={{ position: 'relative', zIndex: 2, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+          <div className="display-serif" style={{ fontSize: 36, lineHeight: 1, color: '#fff' }}>{upcoming.length}</div>
+          <div className="mono" style={{ fontSize: 9.5, letterSpacing: 0.16, textTransform: 'uppercase', color: 'rgba(255,255,255,0.85)', fontWeight: 600 }}>próximos</div>
+        </div>
+      </div>
+
+      <div className="row" style={{ gap: 8, padding: '12px 18px', borderBottom: '1px solid var(--separator)', flexWrap: 'wrap' }}>
+        {type.times.length === 0
+          ? <span className="chip" style={{ color: 'var(--text-3)' }}><I.Clock size={11}/> Sin horarios</span>
+          : type.times.map(t => <span key={t.id} className="chip"><I.Clock size={11}/>{t.start_time} – {t.end_time}</span>)}
+        <span style={{ flex: 1 }}/>
+        <button className="btn btn-ghost btn-sm" onClick={onConfigure}><I.Settings size={12}/> Configuración</button>
+      </div>
+
+      <div>
+        {shown.length === 0 ? (
+          <div style={{ padding: '24px 20px', textAlign: 'center', fontSize: 12.5, color: 'var(--text-3)' }}>
+            Sin servicios programados aún. Pulsa <b style={{ color: 'var(--text-2)' }}>+ Nuevo {type.name.toLowerCase()}</b> para crear el primero.
+          </div>
+        ) : shown.map(p => {
+          const d = formatPlanDate(p.scheduled_at)
+          const st = STATUS_LABEL[p.status] || STATUS_LABEL.draft
+          return (
+            <div key={p.id} className="svc-instance" onClick={() => onOpenPlan(p.id)}>
+              <div className="svc-instance-date" style={{ ['--tone' as any]: color }}>
+                <div className="m" style={{ color }}>{d.dow}</div>
+                <div className="d">{d.day}</div>
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>{p.title}</div>
+                  <span style={{ height: 22, padding: '0 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: st.bg, color: st.c, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ width: 5, height: 5, borderRadius: 99, background: 'currentColor' }}/>
+                    {st.l}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 3 }}>
+                  {d.full} · {d.time}
+                </div>
+              </div>
+              <span className="list-chev"><I.Chev/></span>
+            </div>
+          )
+        })}
+        <div className="row" style={{ padding: '10px 18px', borderTop: '1px solid var(--separator)', background: 'var(--surface-2)' }}>
+          <button className="btn btn-ghost btn-sm" onClick={onNewPlan}><I.Plus size={12}/> Nuevo {type.name.toLowerCase()}</button>
+          <span style={{ flex: 1 }}/>
+          {upcoming.length > shown.length && (
+            <button className="btn btn-ghost btn-sm">Ver todos ({upcoming.length}) <I.Chev size={12}/></button>
+          )}
+        </div>
+      </div>
+    </article>
+  )
+}
+
+function ServiciosList({ slug, teams, onOpenPlan, onOpenTypeConfig, onChanged }: {
+  slug: string; teams: Team[]; onOpenPlan: () => void;
+  onOpenTypeConfig: (t: ServiceType) => void;
+  onChanged: () => void;
+}) {
+  const [newOpen, setNewOpen] = useState(false)
+  const [types, setTypes] = useState<ServiceType[]>([])
+  const [plans, setPlans] = useState<{ id: string; title: string; status: string; scheduled_at: string | null; service_type_id: string | null }[]>([])
+  const [loading, setLoading] = useState(true)
+  const [addPlanFor, setAddPlanFor] = useState<string | null>(null)
+
+  const reload = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [tRes, pRes] = await Promise.all([
+        api(`/api/v1/tenant/${slug}/services/types`),
+        api(`/api/v1/tenant/${slug}/services/plans`),
+      ])
+      setTypes(tRes.ok ? await tRes.json() : [])
+      setPlans(pRes.ok ? await pRes.json() : [])
+    } finally { setLoading(false) }
+    onChanged()
+  }, [slug, onChanged])
+  useEffect(() => { reload() }, [reload])
+
+  function plansFor(typeId: string) { return plans.filter(p => p.service_type_id === typeId) }
+
   return (
     <div className="content">
       <div className="page-head rise">
@@ -641,72 +818,317 @@ function ServiciosList({ onOpenPlan }: { onOpenPlan: () => void }) {
         <div className="row" style={{ gap: 8 }}>
           <button className="btn btn-secondary"><I.Filter size={14}/> Filtrar</button>
           <button className="btn btn-secondary"><I.Settings size={14}/> Gestionar tipos</button>
-          <button className="btn btn-primary"><I.Plus size={14}/> Nuevo servicio</button>
+          <button className="btn btn-primary" onClick={() => setNewOpen(true)}><I.Plus size={14}/> Nuevo servicio</button>
         </div>
       </div>
-      <div className="grid grid-12 rise rise-d2">
-        {D.serviceTypes.map(st => (
-          <article key={st.id} className="col-6 card" style={{ overflow: 'hidden' }}>
-            <div className="svc-ribbon" style={{ background: `linear-gradient(135deg, ${st.color}, color-mix(in oklab, ${st.color} 70%, #000))` }}>
-              <div className="svc-ribbon-deco"/>
-              <div className="svc-ribbon-deco b"/>
-              <div style={{ flex: 1, position: 'relative', zIndex: 2 }}>
-                <div className="svc-ribbon-sub">{st.rec}</div>
-                <div className="svc-ribbon-title">{st.name}</div>
+
+      {newOpen && (
+        <NewServiceModal slug={slug} teams={teams}
+          onClose={() => setNewOpen(false)}
+          onCreated={() => reload()}/>
+      )}
+      {addPlanFor && (
+        <AddPlanModalV2 slug={slug} typeId={addPlanFor}
+          typeName={types.find(t => t.id === addPlanFor)?.name || 'Servicio'}
+          onClose={() => setAddPlanFor(null)}
+          onCreated={() => { setAddPlanFor(null); reload() }}/>
+      )}
+
+      {loading && types.length === 0 ? (
+        <div className="card" style={{ padding: 40, textAlign: 'center', fontSize: 13, color: 'var(--text-3)' }}>Cargando…</div>
+      ) : types.length === 0 ? (
+        <div className="card" style={{ padding: 40, textAlign: 'center', fontSize: 13.5, color: 'var(--text-3)' }}>
+          Aún no hay tipos de servicio. Pulsa <b style={{ color: 'var(--text-2)' }}>+ Nuevo servicio</b> para crear el primero.
+        </div>
+      ) : (
+        <div className="grid grid-12 rise rise-d2">
+          {types.map(t => (
+            <ServiceTypeCard key={t.id} type={t} plans={plansFor(t.id)}
+              onOpenPlan={() => onOpenPlan()}
+              onNewPlan={() => setAddPlanFor(t.id)}
+              onConfigure={() => onOpenTypeConfig(t)}/>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ServiceTypeConfigView({ slug, type, teams, onBack, onChanged, onDeleted }: {
+  slug: string; type: ServiceType; teams: Team[];
+  onBack: () => void;
+  onChanged: (t: ServiceType) => void;
+  onDeleted: () => void;
+}) {
+  const [name, setName] = useState(type.name)
+  const [colorHex, setColorHex] = useState<string>(type.color || '#0A84FF')
+  const [recurrence, setRecurrence] = useState<Recurrence>(type.recurrence as Recurrence)
+  const [description, setDescription] = useState<string>(type.description || '')
+  const [times, setTimes] = useState<ServiceTimeIn[]>(
+    type.times.map(t => ({ starts_on: t.starts_on, start_time: t.start_time, end_time: t.end_time }))
+  )
+  const [teamIds, setTeamIds] = useState<string[]>(type.team_ids || [])
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  const colorMatch = SERVICE_COLORS.find(c => c.hex.toLowerCase() === colorHex.toLowerCase())
+  const dirty = JSON.stringify({
+    name: type.name, color: type.color, recurrence: type.recurrence, description: type.description || '',
+    times: type.times.map(t => ({ s: t.starts_on, a: t.start_time, b: t.end_time })),
+    teamIds: (type.team_ids || []).join(','),
+  }) !== JSON.stringify({
+    name, color: colorHex, recurrence, description,
+    times: times.map(t => ({ s: t.starts_on, a: t.start_time, b: t.end_time })),
+    teamIds: teamIds.join(','),
+  })
+
+  async function save() {
+    if (!name.trim()) { setErr('Nombre requerido'); return }
+    if (times.length === 0) { setErr('Añade al menos un horario'); return }
+    for (const t of times) {
+      if (!t.starts_on || !t.start_time || !t.end_time) { setErr('Completa todos los horarios'); return }
+      if (t.end_time <= t.start_time) { setErr('La hora de fin debe ser posterior a la de inicio'); return }
+    }
+    setSaving(true); setErr('')
+    try {
+      const r = await api(`/api/v1/tenant/${slug}/services/types/${type.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: name.trim(), color: colorHex, recurrence,
+          description: description || null,
+          times, team_ids: teamIds,
+        }),
+      })
+      if (r.ok) onChanged(await r.json())
+      else { const j = await r.json().catch(() => ({})); setErr((j as any).detail || 'Error') }
+    } finally { setSaving(false) }
+  }
+
+  async function del() {
+    if (!confirm(`¿Eliminar el tipo de servicio "${type.name}"?\n\nSe perderán todos sus planes asociados. Esta acción es irreversible.`)) return
+    const r = await api(`/api/v1/tenant/${slug}/services/types/${type.id}`, { method: 'DELETE' })
+    if (r.ok) onDeleted()
+    else { const j = await r.json().catch(() => ({})); alert((j as any).detail || 'Error') }
+  }
+
+  function updTime(i: number, patch: Partial<ServiceTimeIn>) {
+    setTimes(prev => prev.map((t, idx) => idx === i ? { ...t, ...patch } : t))
+  }
+  function addTime() {
+    const last = times[times.length - 1]
+    setTimes(prev => [...prev, { starts_on: last?.starts_on || nextSundayISO(), start_time: '08:00', end_time: '09:00' }])
+  }
+  function rmTime(i: number) {
+    setTimes(prev => prev.filter((_, idx) => idx !== i))
+  }
+  function toggleTeam(id: string) {
+    setTeamIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
+
+  return (
+    <div className="content route-enter">
+      <div className="page-head rise" style={{ alignItems: 'flex-start' }}>
+        <div>
+          <button className="btn btn-ghost btn-sm" onClick={onBack} style={{ marginBottom: 10, paddingLeft: 0 }}>
+            <I.ChevLeft size={13}/> SERVICIOS
+          </button>
+          <div className="row" style={{ gap: 12 }}>
+            <span style={{ width: 18, height: 18, borderRadius: 6, background: colorHex, flexShrink: 0 }}/>
+            <h1 className="page-title" style={{ fontSize: 28 }}>{type.name}</h1>
+          </div>
+          <p className="page-sub" style={{ marginTop: 8 }}>Configuración del tipo de servicio. Cambia nombre, color, recurrencia, horarios y equipos.</p>
+        </div>
+      </div>
+
+      <div className="rise rise-d2">
+        <div className="grid grid-12" style={{ gap: 'var(--gap)' }}>
+          <div className="col-6">
+            <CfgCard icon={I.Settings} title="Detalles">
+              <div style={{ marginBottom: 14 }}>
+                <label className="field-label">Nombre</label>
+                <input className="input" value={name} onChange={e => setName(e.target.value)} style={{ width: '100%', height: 40 }}/>
               </div>
-              <div style={{ position: 'relative', zIndex: 2, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                <div className="display-serif" style={{ fontSize: 36, lineHeight: 1, color: '#fff' }}>{st.instances.length}</div>
-                <div className="mono" style={{ fontSize: 9.5, letterSpacing: 0.16, textTransform: 'uppercase', color: 'rgba(255,255,255,0.85)', fontWeight: 600 }}>próximos</div>
+              <div style={{ marginBottom: 14 }}>
+                <label className="field-label">Recurrencia</label>
+                <select value={recurrence} onChange={e => setRecurrence(e.target.value as Recurrence)} style={{
+                  width: '100%', height: 40, padding: '0 36px 0 14px', borderRadius: 'var(--radius-sm)',
+                  background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--hairline)',
+                  fontSize: 13.5, cursor: 'pointer', appearance: 'none', fontFamily: 'inherit',
+                  backgroundImage: "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238E8E93' stroke-width='2'><polyline points='6 9 12 15 18 9'/></svg>\")",
+                  backgroundRepeat: 'no-repeat', backgroundPosition: 'right 12px center',
+                }}>
+                  {RECUR_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+                </select>
               </div>
-            </div>
-            <div className="row" style={{ gap: 8, padding: '12px 18px', borderBottom: '1px solid var(--separator)', flexWrap: 'wrap' }}>
-              {st.times.map(t => <span key={t} className="chip"><I.Clock size={11}/>{t}</span>)}
-              <span style={{ flex: 1 }}/>
-              <button className="btn btn-ghost btn-sm"><I.Settings size={12}/> Configurar tipo</button>
-            </div>
-            <div>
-              {st.instances.map(inst => {
-                const tn = statusTone[inst.status] || statusTone['Borrador']
-                return (
-                  <div key={inst.id} className="svc-instance" onClick={onOpenPlan}>
-                    <div className="svc-instance-date" style={{ ['--tone' as any]: st.color }}>
-                      <div className="m" style={{ color: st.color }}>{inst.dow}</div>
-                      <div className="d">{inst.date.split(' ')[0]}</div>
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-                        <div style={{ fontSize: 14, fontWeight: 600 }}>{(inst as any).special || st.name}</div>
-                        <span style={{ height: 22, padding: '0 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: tn.bg, color: tn.c, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                          <span style={{ width: 5, height: 5, borderRadius: 99, background: 'currentColor' }}/>
-                          {inst.status}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 3 }}>
-                        {inst.date} · {inst.time}
-                        {inst.teamTotal > 0 && <> · {inst.teamConfirmed}/{inst.teamTotal} confirmados</>}
-                        {inst.leader && inst.leader !== 'Por asignar' && <> · {inst.leader}</>}
-                        {inst.leader === 'Por asignar' && <> · <span style={{ color: 'var(--danger)' }}>sin líder</span></>}
-                      </div>
-                      {inst.teamTotal > 0 && (
-                        <div style={{ marginTop: 8, display: 'flex', height: 4, borderRadius: 99, background: 'var(--surface-3)', overflow: 'hidden', maxWidth: 220 }}>
-                          <div style={{ width: `${(inst.teamConfirmed/inst.teamTotal)*100}%`, background: st.color }}/>
-                        </div>
-                      )}
-                    </div>
-                    <span className="list-chev"><I.Chev/></span>
+              <div>
+                <label className="field-label">Descripción</label>
+                <textarea value={description} onChange={e => setDescription(e.target.value)}
+                  className="input" style={{ width: '100%', minHeight: 70, padding: 12, resize: 'vertical', fontFamily: 'inherit' }}
+                  placeholder="Opcional: rol del servicio"/>
+              </div>
+            </CfgCard>
+          </div>
+
+          <div className="col-6">
+            <CfgCard icon={I.Sun} title="Color del banner">
+              <div className="svc-ribbon" style={{
+                borderRadius: 'var(--radius-md)', marginBottom: 16, minHeight: 80,
+                background: `linear-gradient(135deg, ${colorHex}, color-mix(in oklab, ${colorHex} 70%, #000))`,
+              }}>
+                <div className="svc-ribbon-deco"/>
+                <div className="svc-ribbon-deco b"/>
+                <div style={{ flex: 1, position: 'relative', zIndex: 2 }}>
+                  <div className="svc-ribbon-sub">{RECUR_LABEL[recurrence] || 'Semanal'}</div>
+                  <div className="svc-ribbon-title">{name || 'Sin nombre'}</div>
+                </div>
+              </div>
+              <div className="swatch-grid">
+                {SERVICE_COLORS.map(c => (
+                  <button key={c.id} className={'swatch' + (colorMatch?.id === c.id ? ' is-active' : '')}
+                    onClick={() => setColorHex(c.hex)} title={c.name}
+                    style={{ background: c.hex, color: c.hex }}/>
+                ))}
+              </div>
+            </CfgCard>
+          </div>
+
+          <div className="col-12">
+            <CfgCard icon={I.Clock} title="Horarios">
+              <div className="stack" style={{ gap: 10 }}>
+                {times.map((t, i) => (
+                  <div key={i} style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 110px) auto minmax(0, 110px) auto',
+                    alignItems: 'center', gap: 10,
+                    padding: '10px 12px', background: 'var(--surface-2)',
+                    borderRadius: 'var(--radius-sm)', border: '1px solid var(--separator)',
+                  }}>
+                    <input type="date" className="input" value={t.starts_on}
+                      onChange={e => updTime(i, { starts_on: e.target.value })} style={{ minWidth: 0, height: 36, width: '100%' }}/>
+                    <span style={{ fontSize: 12, color: 'var(--text-3)' }}>de</span>
+                    <input type="time" className="input" value={t.start_time}
+                      onChange={e => updTime(i, { start_time: e.target.value })} style={{ minWidth: 0, height: 36, width: '100%' }}/>
+                    <span style={{ fontSize: 12, color: 'var(--text-3)' }}>a</span>
+                    <input type="time" className="input" value={t.end_time}
+                      onChange={e => updTime(i, { end_time: e.target.value })} style={{ minWidth: 0, height: 36, width: '100%' }}/>
+                    {times.length > 1
+                      ? <button className="icon-btn" onClick={() => rmTime(i)} title="Quitar"><I.X size={14}/></button>
+                      : <span style={{ width: 28 }}/>}
                   </div>
-                )
-              })}
-              <div className="row" style={{ padding: '10px 18px', borderTop: '1px solid var(--separator)', background: 'var(--surface-2)' }}>
-                <button className="btn btn-ghost btn-sm"><I.Plus size={12}/> Nuevo {st.name.toLowerCase()}</button>
-                <span style={{ flex: 1 }}/>
-                <button className="btn btn-ghost btn-sm">Ver todos <I.Chev size={12}/></button>
+                ))}
               </div>
-            </div>
-          </article>
-        ))}
+              <button className="btn btn-ghost btn-sm" onClick={addTime} style={{ marginTop: 12 }}>
+                <I.Plus size={12}/> Añadir otro horario
+              </button>
+            </CfgCard>
+          </div>
+
+          <div className="col-12">
+            <CfgCard icon={I.People} title="Equipos participantes">
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.5 }}>
+                Selecciona los equipos que participarán en este tipo de servicio.
+              </div>
+              {teams.length === 0 ? (
+                <div style={{ fontSize: 13, color: 'var(--text-4)', fontStyle: 'italic' }}>Sin equipos creados.</div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
+                  {teams.map(t => {
+                    const checked = teamIds.includes(t.id)
+                    return (
+                      <button key={t.id} onClick={() => toggleTeam(t.id)} style={{
+                        display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px',
+                        border: '1.5px solid ' + (checked ? 'var(--accent)' : 'var(--separator)'),
+                        borderRadius: 'var(--radius-md)',
+                        background: checked ? 'var(--accent-tint)' : 'var(--surface)',
+                        cursor: 'pointer', textAlign: 'left', transition: 'border-color 140ms, background 140ms',
+                      }}>
+                        <span style={{ width: 12, height: 12, borderRadius: 4, background: t.color || 'var(--accent)', flexShrink: 0 }}/>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13.5, fontWeight: 600, letterSpacing: '-0.01em' }}>{t.name}</div>
+                          <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>{t.member_count} miembro{t.member_count === 1 ? '' : 's'}</div>
+                        </div>
+                        {checked && <I.Check size={14} {...{ style: { color: 'var(--accent)' } } as any}/>}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </CfgCard>
+          </div>
+        </div>
+
+        {err && (
+          <div style={{ marginTop: 16, padding: '10px 12px', borderRadius: 10, background: 'color-mix(in oklab, var(--danger) 12%, transparent)', color: 'var(--danger)', fontSize: 13, fontWeight: 600 }}>
+            {err}
+          </div>
+        )}
+
+        <div className="row-between" style={{ marginTop: 'var(--gap)' }}>
+          <button className="btn btn-secondary" style={{ color: 'var(--danger)', borderColor: 'color-mix(in oklab, var(--danger) 30%, transparent)' }} onClick={del}>
+            <I.Trash size={14}/> Eliminar tipo de servicio
+          </button>
+          <div className="row" style={{ gap: 10 }}>
+            {dirty && <span style={{ fontSize: 12, color: 'var(--warning)', fontWeight: 600 }}>Cambios sin guardar</span>}
+            <button className="btn btn-primary" disabled={!dirty || saving} onClick={save}>
+              <I.Check size={14}/> {saving ? 'Guardando…' : 'Guardar cambios'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
+  )
+}
+
+function AddPlanModalV2({ slug, typeId, typeName, onClose, onCreated }: {
+  slug: string; typeId: string; typeName: string; onClose: () => void; onCreated: () => void;
+}) {
+  const [next, setNext] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    api(`/api/v1/tenant/${slug}/services/types/${typeId}/next-default`)
+      .then(r => r.ok ? r.json() : null)
+      .then(j => { if (j?.scheduled_at) setNext(j.scheduled_at) })
+      .catch(() => {})
+  }, [slug, typeId])
+
+  async function create() {
+    setBusy(true); setErr('')
+    try {
+      const r = await api(`/api/v1/tenant/${slug}/services/plans`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ service_type_id: typeId }),
+      })
+      if (r.ok) onCreated()
+      else { const j = await r.json().catch(() => ({})); setErr((j as any).detail || 'Error') }
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <ModalShell width={460} onClose={onClose}>
+      <div className="modal-head">
+        <div className="modal-title">Nuevo {typeName.toLowerCase()}</div>
+        <button className="icon-btn" onClick={onClose}><I.X size={16}/></button>
+      </div>
+      <div className="modal-body">
+        <p style={{ fontSize: 13, color: 'var(--text-3)', margin: '0 0 14px', lineHeight: 1.55 }}>
+          Se creará un nuevo plan basado en este tipo de servicio. La fecha se rellena automáticamente con la próxima ocurrencia.
+        </p>
+        <div style={{ padding: 14, background: 'var(--surface-2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--separator)' }}>
+          <div className="field-label" style={{ marginBottom: 4 }}>Fecha y hora</div>
+          <div className="mono" style={{ fontSize: 13.5, color: next ? 'var(--text)' : 'var(--text-3)' }}>
+            {next ? new Date(next).toLocaleString('es-ES', { dateStyle: 'full', timeStyle: 'short' }) : 'Calculando…'}
+          </div>
+        </div>
+        {err && <div style={{ marginTop: 14, color: 'var(--danger)', fontSize: 13 }}>{err}</div>}
+      </div>
+      <div className="modal-foot">
+        <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+        <span style={{ flex: 1 }}/>
+        <button className="btn btn-primary" onClick={create} disabled={busy}><I.Check size={14}/> {busy ? 'Creando…' : 'Crear plan'}</button>
+      </div>
+    </ModalShell>
   )
 }
 
@@ -1315,22 +1737,312 @@ function Canciones({ onOpenSong }: { onOpenSong: () => void }) {
   )
 }
 
-function CancionDetail({ onBack }: { onBack: () => void }) {
-  const s = D.songs[0]
-  const [arr, setArr] = useState<(typeof s.arrangements)[number] | null>(s.arrangements[0] || null)
-  const [mode, setMode] = useState<'chords' | 'lyrics' | 'sheet' | 'present'>('chords')
-  const lyrics = s.lyrics || []
+function gatherPrts(song: any) {
+  return (song.arrangements || [])
+    .filter((a: any) => a.prt)
+    .map((a: any) => ({ ...a.prt, arrId: a.id, arrName: a.name, songKey: a.key }))
+}
+
+function PrtViewer({ song, arr }: { song: any; arr: any }) {
+  const [mode, setMode] = useState<'chords' | 'lyrics' | 'present'>('chords')
+  const lyrics = song.lyrics || []
+  const prt = arr.prt
+  if (!prt) {
+    return (
+      <div className="card">
+        <div className="card-head"><div className="card-title">Letra del arreglo</div></div>
+        <div style={{ padding: 24 }}>
+          <div className="dropzone">
+            <div style={{ width: 46, height: 46, borderRadius: 12, background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', margin: '0 auto 12px' }}>
+              <I.Upload size={20}/>
+            </div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Este arreglo aún no tiene fichero <span className="mono">.prt</span></div>
+            <div style={{ fontSize: 12.5, color: 'var(--text-3)', marginTop: 6, lineHeight: 1.5, maxWidth: 420, margin: '6px auto 0' }}>
+              Genera la letra desde la app de letras de Worsyn y súbela aquí, o arrastra un <span className="mono">.prt</span> existente.
+              Cada arreglo puede tener su propia versión.
+            </div>
+            <button className="btn btn-primary btn-sm" style={{ marginTop: 14 }}><I.Plus size={13}/> Subir fichero .prt</button>
+          </div>
+        </div>
+      </div>
+    )
+  }
   return (
-    <div className="content">
+    <div className="card">
+      <div className="card-head" style={{ flexWrap: 'wrap', gap: 10 }}>
+        <div className="row" style={{ gap: 10 }}>
+          <div className="prt-badge"><span style={{ position: 'absolute', bottom: 4 }}>PRT</span><I.Doc size={15} {...{ style: { opacity: 0.35, position: 'absolute', top: 5 } } as any}/></div>
+          <div>
+            <div className="card-title">{prt.name}</div>
+            <div className="card-sub">Generado desde la app de letras · {prt.by} · {prt.when} · {prt.slides} diapositivas</div>
+          </div>
+        </div>
+        <div className="seg">
+          <button onClick={() => setMode('chords')}  className={'seg-btn' + (mode === 'chords' ? ' is-active' : '')}>Letra + Acordes</button>
+          <button onClick={() => setMode('lyrics')}  className={'seg-btn' + (mode === 'lyrics' ? ' is-active' : '')}>Solo letra</button>
+          <button onClick={() => setMode('present')} className={'seg-btn' + (mode === 'present' ? ' is-active' : '')}>Presentación</button>
+        </div>
+      </div>
+      <div style={{ padding: '20px 24px' }}>
+        {mode === 'present' ? (
+          <div>
+            <div style={{
+              display: 'flex', alignItems: 'flex-start', gap: 10,
+              padding: '12px 14px', marginBottom: 16, borderRadius: 12,
+              background: 'var(--accent-tint)', border: '1px solid color-mix(in oklab, var(--accent) 25%, transparent)',
+              fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5,
+            }}>
+              <I.Sparkles size={15} {...{ style: { color: 'var(--accent)', flexShrink: 0, marginTop: 1 } } as any}/>
+              <div>Vista por diapositivas del fichero <b className="mono">{prt.name}</b>. Cada sección es una diapositiva y se sincroniza con la app de proyección — el operador solo avanza en vivo.</div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 14 }}>
+              {lyrics.map((sec: any, i: number) => (
+                <div key={i} className="lyric-slide">
+                  <div className="lyric-slide-label">{sec.section}</div>
+                  <div className="lyric-slide-num">{i + 1}/{lyrics.length}</div>
+                  <div>{sec.lines.map((ln: string, j: number) => <div key={j} className="lyric-slide-line">{ln}</div>)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <pre style={{ fontFamily: 'Geist Mono, ui-monospace, monospace', fontSize: 14, lineHeight: mode === 'lyrics' ? 1.8 : 2.1, color: 'var(--text)', whiteSpace: 'pre-wrap', margin: 0 }}>
+            {mode === 'lyrics' ? lyrics.map((sec: any) => sec.section + '\n' + sec.lines.join('\n')).join('\n\n') : `[Verso 1]\n   ${arr.key}                A\nMaravilloso es tu nombre\n   Bm              G\nCantaremos por siempre\n\n[Coro]\nG        ${arr.key}       A\nSanto, santo, santo\n\n[Puente] (x2)\n   Em              G\nInunda este lugar`}
+          </pre>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ArrangementView({ song, arr }: { song: any; arr: any }) {
+  const fileMeta: Record<string, { tone: string; meta: string }> = {
+    'Letra':      { tone: '#0A84FF', meta: 'Documento' },
+    'Acordes':    { tone: '#FF9500', meta: 'PDF · acordes' },
+    'Multipista': { tone: '#AF52DE', meta: 'ZIP · pistas' },
+    'Partitura':  { tone: '#34C759', meta: 'PDF · partitura' },
+  }
+  return (
+    <div className="grid grid-12">
+      <section className="col-8 stack" style={{ gap: 'var(--gap)' }}>
+        <div className="card" style={{
+          padding: '24px 24px',
+          background: 'linear-gradient(135deg, var(--accent-tint), transparent 60%), var(--surface)',
+          display: 'flex', alignItems: 'center', gap: 22,
+        }}>
+          <div style={{
+            width: 84, height: 84, borderRadius: 18, background: 'var(--surface)',
+            border: '1px solid var(--separator)', display: 'grid', placeItems: 'center', boxShadow: 'var(--shadow-2)', flexShrink: 0,
+          }}>
+            <div className="display-serif" style={{ fontSize: 58, color: 'var(--accent)', lineHeight: 1 }}>{arr.key}</div>
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="row" style={{ gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+              {arr.isOriginal
+                ? <span className="pill-tone tone-blue"><span className="chip-dot"/>Arreglo original</span>
+                : <span className="pill-tone tone-violet"><span className="chip-dot"/>por {arr.by}</span>}
+              <span className="chip mono">{arr.sequence}</span>
+            </div>
+            <div className="row" style={{ gap: 24, flexWrap: 'wrap' }}>
+              {[['Tono', arr.key], ['BPM', arr.bpm], ['Duración', arr.length], ['Compás', arr.meter]].map(([l, v]) => (
+                <div key={l}>
+                  <div className="mono" style={{ fontSize: 10, color: 'var(--text-3)', letterSpacing: 0.1, textTransform: 'uppercase' }}>{l}</div>
+                  <div className="display-serif" style={{ fontSize: 28, lineHeight: 1, marginTop: 4 }}>{v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <button className="btn btn-primary" style={{ width: 52, height: 52, padding: 0, borderRadius: '50%', justifyContent: 'center', flexShrink: 0 }}>
+            <I.Play size={20}/>
+          </button>
+        </div>
+        <PrtViewer song={song} arr={arr}/>
+      </section>
+      <aside className="col-4 stack" style={{ gap: 'var(--gap)' }}>
+        <div className="card">
+          <div className="card-head">
+            <div className="card-title">Archivos del arreglo</div>
+            <button className="icon-btn" title="Añadir"><I.Plus size={14}/></button>
+          </div>
+          <div>
+            {arr.prt && (
+              <div className="list-row" style={{ borderRadius: 0 }}>
+                <div className="prt-badge" style={{ width: 30, height: 30, borderRadius: 8 }}><span style={{ fontSize: 7 }}>PRT</span></div>
+                <div className="list-body">
+                  <div className="list-title" style={{ fontSize: 13 }}>{arr.prt.name}</div>
+                  <div className="list-sub">Letra · {arr.prt.slides} diapositivas</div>
+                </div>
+                <button className="icon-btn"><I.Down size={14}/></button>
+              </div>
+            )}
+            {arr.files.map((f: string) => {
+              const m = fileMeta[f] || { tone: '#0A84FF', meta: 'Archivo' }
+              return (
+                <div key={f} className="list-row" style={{ borderRadius: 0 }}>
+                  <div style={{ width: 30, height: 30, borderRadius: 8, background: m.tone + '1F', color: m.tone, display: 'grid', placeItems: 'center' }}>
+                    <I.Doc size={14}/>
+                  </div>
+                  <div className="list-body">
+                    <div className="list-title" style={{ fontSize: 13 }}>{f}</div>
+                    <div className="list-sub">{m.meta}</div>
+                  </div>
+                  <button className="icon-btn"><I.Down size={14}/></button>
+                </div>
+              )
+            })}
+          </div>
+          <div style={{ padding: 12, borderTop: '1px solid var(--separator)' }}>
+            <button className="btn btn-secondary btn-sm" style={{ width: '100%', justifyContent: 'center' }}><I.Upload size={13}/> Subir archivo a este arreglo</button>
+          </div>
+        </div>
+        <div className="card">
+          <div className="card-head"><div className="card-title">Detalles</div></div>
+          <div>
+            {[['Secuencia', arr.sequence], ['Autor del arreglo', arr.by], ['Tipo', arr.isOriginal ? 'Original' : 'Adaptación']].map(([l, v]) => (
+              <div key={l as string} className="list-row" style={{ borderRadius: 0 }}>
+                <div className="list-body"><div style={{ fontSize: 13, color: 'var(--text-3)' }}>{l}</div></div>
+                <span style={{ fontSize: 13, fontWeight: 600 }} className={l === 'Secuencia' ? 'mono' : ''}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </aside>
+    </div>
+  )
+}
+
+function GeneralView({ song, onOpenArr }: { song: any; onOpenArr: (id: string) => void }) {
+  const prts = gatherPrts(song)
+  const otherFiles = [
+    { i: I.Music, t: 'Mp3 original.mp3', meta: '4:38 · 6.4 MB', tone: '#AF52DE' },
+    { i: I.Doc,   t: 'Acordes maestro.pdf', meta: '2 páginas · 240 KB', tone: '#FF9500' },
+    { i: I.Music, t: 'Multipista.zip', meta: '8 pistas · 84 MB', tone: '#0A84FF' },
+  ]
+  return (
+    <div className="grid grid-12">
+      <section className="col-8 stack" style={{ gap: 'var(--gap)' }}>
+        <div className="card">
+          <div className="card-head">
+            <div>
+              <div className="card-title">Ficheros de letra <span className="mono" style={{ color: 'var(--accent)' }}>.prt</span></div>
+              <div className="card-sub">{prts.length} {prts.length === 1 ? 'fichero' : 'ficheros'} · generados desde la app de letras</div>
+            </div>
+            <button className="btn btn-secondary btn-sm"><I.Plus size={13}/> Añadir</button>
+          </div>
+          <div style={{ padding: 16 }}>
+            <div className="dropzone" style={{ marginBottom: prts.length ? 16 : 0 }}>
+              <div style={{ width: 42, height: 42, borderRadius: 11, background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', margin: '0 auto 10px' }}>
+                <I.Upload size={18}/>
+              </div>
+              <div style={{ fontSize: 13.5, fontWeight: 600 }}>Arrastra y suelta o <span style={{ color: 'var(--accent)' }}>haz clic</span> para subir un <span className="mono">.prt</span></div>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 5, lineHeight: 1.5 }}>
+                Puedes subir varias versiones de la misma canción. Cada arreglo puede enlazar su propio fichero.
+              </div>
+            </div>
+            <div className="stack" style={{ gap: 8 }}>
+              {prts.map((p: any) => (
+                <div key={p.arrId} className="prt-row" onClick={() => onOpenArr(p.arrId)}>
+                  <div className="prt-badge"><span>PRT</span></div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
+                      Arreglo <b style={{ color: 'var(--text-2)' }}>{p.arrName}</b> · {p.slides} diapositivas · {p.when}
+                    </div>
+                  </div>
+                  <span className="chip mono">{p.songKey}</span>
+                  <span className="list-chev"><I.Chev size={14}/></span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-head">
+            <div className="card-title">Otros archivos</div>
+            <button className="btn btn-secondary btn-sm"><I.Upload size={13}/> Subir</button>
+          </div>
+          <div>
+            {otherFiles.map((f, i) => (
+              <div key={i} className="list-row" style={{ borderRadius: 0 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: f.tone + '1F', color: f.tone, display: 'grid', placeItems: 'center' }}>
+                  <f.i size={15}/>
+                </div>
+                <div className="list-body">
+                  <div className="list-title" style={{ fontSize: 13 }}>{f.t}</div>
+                  <div className="list-sub">{f.meta}</div>
+                </div>
+                <button className="icon-btn"><I.Down size={14}/></button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <aside className="col-4 stack" style={{ gap: 'var(--gap)' }}>
+        <div className="card">
+          <div className="card-head">
+            <div className="card-title">Etiquetas</div>
+            <button className="btn btn-secondary btn-sm"><I.Plus size={12}/> Añadir</button>
+          </div>
+          <div style={{ padding: 16 }}>
+            <div className="mono" style={{ fontSize: 10, letterSpacing: 0.1, textTransform: 'uppercase', color: 'var(--text-3)', marginBottom: 8 }}>Estilo</div>
+            <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+              {(song.tags || ['Adoración']).map((t: string) => (
+                <span key={t} className="chip" style={{ height: 26, background: 'var(--accent-tint)', color: 'var(--accent)' }}>{t} <I.X size={11}/></span>
+              ))}
+              <span className="chip" style={{ height: 26 }}>Lento</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-head">
+            <div className="card-title">Programación</div>
+            <span className="chip mono">3 más recientes</span>
+          </div>
+          <div>
+            {[
+              { d: '24 May 2026', s: 'Servicio Dominical', who: 'Lucía', arr: 'Versión dominical' },
+              { d: '17 May 2026', s: 'Servicio Dominical', who: 'Diego', arr: 'Original' },
+              { d: '10 May 2026', s: 'Jóvenes', who: 'Diego', arr: 'Acústico (Jóvenes)' },
+            ].map((h, i) => (
+              <div key={i} className="list-row" style={{ borderRadius: 0 }}>
+                <div style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--surface-3)', color: 'var(--text-2)', display: 'grid', placeItems: 'center' }}>
+                  <I.Cal size={14}/>
+                </div>
+                <div className="list-body">
+                  <div className="list-title" style={{ fontSize: 13 }}>{h.s}</div>
+                  <div className="list-sub">{h.d} · {h.who} · {h.arr}</div>
+                </div>
+                <span className="list-chev"><I.Chev size={14}/></span>
+              </div>
+            ))}
+            <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--text-3)', lineHeight: 1.5, borderTop: '1px solid var(--separator)' }}>
+              Esta canción se ha programado <b style={{ color: 'var(--text-2)' }}>12 veces</b> en los últimos 6 meses.
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  )
+}
+
+function CancionDetail({ onBack }: { onBack: () => void }) {
+  const song = D.songs[0]
+  const arrs = song.arrangements || []
+  const [sel, setSel] = useState<string>('general')
+  const activeArr = arrs.find((a: any) => a.id === sel)
+  return (
+    <div className="content route-enter">
       <div className="page-head rise">
         <div style={{ flex: 1 }}>
           <div className="row" style={{ gap: 8, marginBottom: 8 }}>
             <button className="btn btn-ghost btn-sm" onClick={onBack}><I.ChevLeft size={13}/> Canciones</button>
-            <span className="chip t-accent"><I.Star size={11}/> Favorita</span>
-            <span className="chip t-mono">Adoración</span>
+            <span className="chip mono">CCLI {song.ccli}</span>
           </div>
-          <h1 className="page-title">{s.title}</h1>
-          <p className="page-sub">{s.author} · CCLI {s.ccli} · Última edición {s.updated}</p>
+          <h1 className="page-title">{song.title}</h1>
+          <p className="page-sub">{song.author} · {arrs.length} arreglos · última edición {song.updated}</p>
         </div>
         <div className="row" style={{ gap: 8 }}>
           <button className="btn btn-secondary"><I.Heart size={14}/></button>
@@ -1338,182 +2050,48 @@ function CancionDetail({ onBack }: { onBack: () => void }) {
           <button className="btn btn-primary"><I.Plus size={14}/> Añadir a servicio</button>
         </div>
       </div>
+
       <div className="grid grid-12 rise rise-d1">
-        <section className="col-8 card">
-          <div style={{ padding: '28px 24px', background: 'linear-gradient(135deg, var(--accent-tint), transparent), var(--surface-2)', borderBottom: '1px solid var(--separator)', display: 'flex', alignItems: 'center', gap: 22 }}>
-            <div style={{ width: 92, height: 92, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--separator)', display: 'grid', placeItems: 'center', boxShadow: 'var(--shadow-2)' }}>
-              <div className="display-serif" style={{ fontSize: 64, color: 'var(--accent)', lineHeight: 1 }}>{arr ? arr.key : s.key}</div>
-            </div>
-            <div style={{ flex: 1 }}>
-              <div className="row" style={{ gap: 8, marginBottom: 12 }}>
-                <span className="pill-tone tone-blue"><span className="chip-dot"/>{arr ? arr.name : 'Original'}</span>
-                <span style={{ fontSize: 12, color: 'var(--text-3)' }}>{arr && arr.isOriginal ? 'Arreglo original' : arr ? 'por ' + arr.by : ''}</span>
+        <aside className="col-3">
+          <div className="card" style={{ padding: 8, position: 'sticky', top: 'calc(56px + var(--gap))' }}>
+            <div style={{ padding: '8px 12px 4px', fontSize: 10, fontWeight: 700, letterSpacing: 0.12, textTransform: 'uppercase', color: 'var(--text-4)' }}>Canción</div>
+            <button className="list-row" style={{ width: '100%', textAlign: 'left', borderRadius: 10, border: 0, background: sel === 'general' ? 'var(--accent-tint)' : 'transparent', cursor: 'pointer' }} onClick={() => setSel('general')}>
+              <div style={{ width: 30, height: 30, borderRadius: 8, background: sel === 'general' ? 'var(--accent)' : 'var(--surface-3)', color: sel === 'general' ? 'var(--on-accent)' : 'var(--text-2)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                <I.Folder size={15}/>
               </div>
-              <div className="row" style={{ gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
-                <div>
-                  <div className="mono" style={{ fontSize: 10, color: 'var(--text-3)', letterSpacing: 0.1, textTransform: 'uppercase' }}>Tono</div>
-                  <div className="row" style={{ gap: 6, marginTop: 4 }}>
-                    <button className="btn btn-secondary btn-sm" style={{ minWidth: 28, padding: 0, height: 28, justifyContent: 'center' }}>−</button>
-                    <div className="display-serif" style={{ fontSize: 30, minWidth: 30, textAlign: 'center', lineHeight: 1 }}>{arr ? arr.key : s.key}</div>
-                    <button className="btn btn-secondary btn-sm" style={{ minWidth: 28, padding: 0, height: 28, justifyContent: 'center' }}>+</button>
-                  </div>
-                </div>
-                <div><div className="mono" style={{ fontSize: 10, color: 'var(--text-3)', letterSpacing: 0.1, textTransform: 'uppercase' }}>BPM</div><div className="display-serif" style={{ fontSize: 30, lineHeight: 1, marginTop: 4 }}>{arr ? arr.bpm : s.bpm}</div></div>
-                <div><div className="mono" style={{ fontSize: 10, color: 'var(--text-3)', letterSpacing: 0.1, textTransform: 'uppercase' }}>Duración</div><div className="display-serif" style={{ fontSize: 30, lineHeight: 1, marginTop: 4 }}>{arr ? arr.length : '4:38'}</div></div>
-                <div><div className="mono" style={{ fontSize: 10, color: 'var(--text-3)', letterSpacing: 0.1, textTransform: 'uppercase' }}>Compás</div><div className="display-serif" style={{ fontSize: 30, lineHeight: 1, marginTop: 4 }}>{arr ? arr.meter : '4/4'}</div></div>
+              <div className="list-body">
+                <div className="list-title" style={{ fontSize: 13.5, color: sel === 'general' ? 'var(--accent)' : 'var(--text)' }}>Todos los arreglos</div>
+                <div className="list-sub">Letras, archivos y etiquetas</div>
               </div>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
-              <button className="btn btn-primary btn-lg" style={{ width: 56, height: 56, padding: 0, borderRadius: '50%', justifyContent: 'center' }}><I.Play size={20}/></button>
-              <div className="mono" style={{ fontSize: 10, color: 'var(--text-3)' }}>1:24 / 4:38</div>
-            </div>
-          </div>
-          <div style={{ padding: '20px 24px' }}>
-            <div className="row-between" style={{ marginBottom: 14 }}>
-              <div className="row" style={{ gap: 8 }}>
-                <div className="seg">
-                  <button onClick={() => setMode('chords')}  className={'seg-btn' + (mode === 'chords' ? ' is-active' : '')}>Letra + Acordes</button>
-                  <button onClick={() => setMode('lyrics')}  className={'seg-btn' + (mode === 'lyrics' ? ' is-active' : '')}>Solo letra</button>
-                  <button onClick={() => setMode('sheet')}   className={'seg-btn' + (mode === 'sheet' ? ' is-active' : '')}>Partitura</button>
-                  <button onClick={() => setMode('present')} className={'seg-btn' + (mode === 'present' ? ' is-active' : '')}>Presentación</button>
-                </div>
-              </div>
-              {mode === 'present'
-                ? <button className="btn btn-primary btn-sm"><I.Play size={13}/> Enviar a proyección</button>
-                : <button className="btn btn-secondary btn-sm"><I.Eye size={13}/> Vista músico</button>}
-            </div>
-            {mode === 'present' ? (
-              <div>
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', marginBottom: 16, borderRadius: 12, background: 'var(--accent-tint)', border: '1px solid color-mix(in oklab, var(--accent) 25%, transparent)', fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5 }}>
-                  <I.Sparkles size={15}/>
-                  <div>Cada sección es una <b>diapositiva</b>. Este apartado se sincroniza con la <b>app de proyección de letras</b> de la iglesia — el operador solo avanza las diapositivas en vivo.</div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 14 }}>
-                  {lyrics.map((sec, i) => (
-                    <div key={i} className="lyric-slide">
-                      <div className="lyric-slide-label">{sec.section}</div>
-                      <div className="lyric-slide-num">{i + 1}/{lyrics.length}</div>
-                      <div>{sec.lines.map((ln, j) => <div key={j} className="lyric-slide-line">{ln}</div>)}</div>
-                    </div>
-                  ))}
-                  <button style={{ aspectRatio: '16 / 9', borderRadius: 'var(--radius-md)', border: '1px dashed var(--hairline)', background: 'transparent', color: 'var(--text-3)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>
-                    <I.Plus size={18}/> Añadir diapositiva
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div style={{ fontFamily: 'Geist Mono, ui-monospace, monospace', fontSize: 14, lineHeight: mode === 'lyrics' ? 1.8 : 2.1, color: 'var(--text)', whiteSpace: 'pre-wrap' }}>
-{mode === 'lyrics'
-? `Verso 1
-Maravilloso es tu nombre
-Cantaremos por siempre
-De tu gracia sin medida
-Renacemos cada día
+            </button>
 
-Coro
-Santo, santo, santo
-Tú eres el cordero
-Digno de toda gloria
-Por la eternidad
-
-Puente (x2)
-Inunda este lugar
-Con tu presencia, Señor`
-: `[Verso 1]
-   D                A
-Maravilloso es tu nombre
-   Bm              G
-Cantaremos por siempre
-   D              A
-De tu gracia sin medida
-   G              D
-Renacemos cada día
-
-[Coro]
-G        D       A
-Santo, santo, santo
-G        D       A
-Tu eres el cordero
-G        D
-Digno de toda gloria
-   Bm    A    D
-Por la eternidad
-
-[Puente] (x2)
-   Em              G
-Inunda este lugar
-   D               A
-Con tu presencia, Señor`}
-              </div>
-            )}
-          </div>
-        </section>
-        <aside className="col-4 stack" style={{ gap: 'var(--gap)' }}>
-          <div className="card">
-            <div className="card-head">
-              <div className="card-title">Versiones / Arreglos</div>
-              <span className="chip t-mono">{s.arrangements.length}</span>
-            </div>
-            <div>
-              {s.arrangements.map(a => (
-                <div key={a.id} className="list-row" style={{ borderRadius: 0, cursor: 'pointer', background: arr && arr.id === a.id ? 'var(--accent-tint)' : 'transparent' }} onClick={() => setArr(a)}>
-                  <div style={{ width: 34, height: 34, borderRadius: 9, flexShrink: 0, display: 'grid', placeItems: 'center', background: arr && arr.id === a.id ? 'var(--accent)' : 'var(--surface-3)', color: arr && arr.id === a.id ? 'var(--on-accent)' : 'var(--text-2)', fontWeight: 700, fontSize: 14 }}>{a.key}</div>
+            <div style={{ padding: '14px 12px 4px', fontSize: 10, fontWeight: 700, letterSpacing: 0.12, textTransform: 'uppercase', color: 'var(--text-4)' }}>Arreglos</div>
+            {arrs.map((a: any) => {
+              const on = sel === a.id
+              return (
+                <button key={a.id} className="list-row" style={{ width: '100%', textAlign: 'left', borderRadius: 10, border: 0, background: on ? 'var(--accent-tint)' : 'transparent', cursor: 'pointer' }} onClick={() => setSel(a.id)}>
+                  <div style={{ width: 30, height: 30, borderRadius: 8, background: on ? 'var(--accent)' : 'var(--surface-3)', color: on ? 'var(--on-accent)' : 'var(--text-2)', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 13, flexShrink: 0 }}>{a.key}</div>
                   <div className="list-body">
                     <div className="row" style={{ gap: 6 }}>
-                      <div className="list-title" style={{ fontSize: 13 }}>{a.name}</div>
-                      {a.isOriginal && <span className="pill-tone tone-blue" style={{ height: 18, fontSize: 10 }}>Original</span>}
+                      <div className="list-title" style={{ fontSize: 13, color: on ? 'var(--accent)' : 'var(--text)' }}>{a.name}</div>
+                      {a.isOriginal && <span className="pill-tone tone-blue" style={{ height: 16, fontSize: 9 }}>Orig.</span>}
                     </div>
-                    <div className="list-sub">{a.bpm} bpm · {a.meter} · {a.length}{!a.isOriginal && ' · ' + a.by}</div>
+                    <div className="list-sub">{a.bpm} bpm · {a.prt ? '.prt ✓' : 'sin .prt'}</div>
                   </div>
-                  {arr && arr.id === a.id && <I.Check size={15}/>}
-                </div>
-              ))}
-              <button className="list-row" style={{ width: '100%', textAlign: 'left' as const, borderRadius: 0, border: 0, color: 'var(--accent)' }}>
-                <div style={{ width: 34, height: 34, borderRadius: 9, background: 'var(--accent-tint)', display: 'grid', placeItems: 'center' }}><I.Plus size={15}/></div>
-                <div className="list-body"><div className="list-title" style={{ fontSize: 13, color: 'var(--accent)' }}>Crear nueva versión</div></div>
-              </button>
-            </div>
-          </div>
-          <div className="card">
-            <div className="card-head"><div className="card-title">Recursos</div></div>
-            <div>
-              {[
-                { Icon: I.Doc,   t: 'Letra.docx',         meta: '14 KB' },
-                { Icon: I.Music, t: 'Mp3 original.mp3',   meta: '4:38 · 6.4 MB' },
-                { Icon: I.Doc,   t: 'Acordes (PDF)',      meta: '2 páginas · 240 KB' },
-                { Icon: I.Doc,   t: 'Multipista (.zip)',  meta: '8 pistas · 84 MB' },
-              ].map((r, i) => (
-                <div key={i} className="list-row" style={{ borderRadius: 0 }}>
-                  <div style={{ width: 30, height: 30, borderRadius: 7, background: 'var(--surface-3)', display: 'grid', placeItems: 'center', color: 'var(--text-2)' }}><r.Icon size={14}/></div>
-                  <div className="list-body">
-                    <div className="list-title" style={{ fontSize: 13 }}>{r.t}</div>
-                    <div className="list-sub">{r.meta}</div>
-                  </div>
-                  <button className="icon-btn"><I.Down size={14}/></button>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className="card">
-            <div className="card-head"><div className="card-title">Últimos servicios</div></div>
-            <div>
-              {[
-                { d: '24 May 2026', s: 'Servicio Dominical', who: 'Lucía' },
-                { d: '17 May 2026', s: 'Servicio Dominical', who: 'Diego' },
-                { d: '10 May 2026', s: 'Jóvenes', who: 'Diego' },
-                { d: '03 May 2026', s: 'Servicio Dominical', who: 'Lucía' },
-              ].map((h, i) => (
-                <div key={i} className="list-row" style={{ borderRadius: 0 }}>
-                  <div className="list-body">
-                    <div className="list-title" style={{ fontSize: 13 }}>{h.s}</div>
-                    <div className="list-sub">{h.d} · {h.who}</div>
-                  </div>
-                  <span className="list-chev"><I.Chev/></span>
-                </div>
-              ))}
-            </div>
+                </button>
+              )
+            })}
+            <button className="arr-add" style={{ margin: '6px 0 2px', width: '100%', justifyContent: 'center' }}>
+              <I.Plus size={13}/> Añadir arreglo
+            </button>
           </div>
         </aside>
+
+        <div className="col-9">
+          {sel === 'general'
+            ? <GeneralView song={song} onOpenArr={(id: string) => setSel(id)}/>
+            : activeArr && <ArrangementView song={song} arr={activeArr}/>}
+        </div>
       </div>
     </div>
   )
@@ -1522,6 +2100,180 @@ Con tu presencia, Señor`}
 // ═════════════════════════════════════════════════════════════════════════════
 // MEDIA (port screens-b.jsx::Media)
 // ═════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
+// MENSAJES (port mensajes.jsx) — multi-chat workspace
+// ═════════════════════════════════════════════════════════════════════════════
+const CONV_KINDS: { id: 'team' | 'service' | 'group' | 'direct'; label: string; icon: (p: { size?: number }) => JSX.Element }[] = [
+  { id: 'team',    label: 'Equipos',     icon: I.People },
+  { id: 'service', label: 'Servicios',   icon: I.Cal },
+  { id: 'group',   label: 'Grupos',      icon: I.Grid },
+  { id: 'direct',  label: 'Directos',    icon: I.User },
+]
+function initialsMsg(name: string) {
+  return name.split(' ').filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase()
+}
+function ConvAvatar({ conv, size = 42 }: { conv: any; size?: number }) {
+  const isGroup = conv.kind !== 'direct'
+  const k = CONV_KINDS.find(x => x.id === conv.kind)
+  const Icon = k?.icon || I.User
+  if (isGroup) {
+    return (
+      <div className="av" data-c={conv.c} style={{ width: size, height: size, borderRadius: 13, flexShrink: 0 }}>
+        <Icon size={Math.round(size * 0.42)}/>
+      </div>
+    )
+  }
+  return <div className="av" data-c={conv.c} style={{ width: size, height: size, fontSize: Math.round(size * 0.34), flexShrink: 0 }}>{initialsMsg(conv.name)}</div>
+}
+
+function Mensajes() {
+  const convs = D.conversations
+  const [activeId, setActiveId] = useState(convs[0].id)
+  const [filter, setFilter] = useState<'all' | 'team' | 'service' | 'group' | 'direct'>('all')
+  const [search, setSearch] = useState('')
+  const [drafts, setDrafts] = useState<Record<string, Array<{ who: 'me'; t: string; when: string }>>>({})
+  const [input, setInput] = useState('')
+  const threadRef = useRef<HTMLDivElement | null>(null)
+  const active = convs.find(c => c.id === activeId)!
+  const liveMsgs = [...(active.msgs || []), ...((drafts[activeId]) || [])]
+
+  useEffect(() => {
+    if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight
+  }, [activeId, drafts])
+
+  const send = () => {
+    const text = input.trim()
+    if (!text) return
+    setDrafts(d => ({ ...d, [activeId]: [...(d[activeId] || []), { who: 'me', t: text, when: 'Ahora' }] }))
+    setInput('')
+  }
+  const visible = convs.filter(c => {
+    if (filter !== 'all' && c.kind !== filter) return false
+    if (search && !c.name.toLowerCase().includes(search.toLowerCase())) return false
+    return true
+  })
+  const grouped = CONV_KINDS.map(k => ({ ...k, items: visible.filter(c => c.kind === k.id) })).filter(g => g.items.length)
+  const totalUnread = convs.reduce((s, c) => s + c.unread, 0)
+
+  return (
+    <div className="content" style={{ padding: 0, maxWidth: 'none' }}>
+      <div className="row-between" style={{ padding: '20px 28px 16px', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <span className="eyebrow">Mensajes</span>
+          <h1 className="page-title" style={{ fontSize: 26 }}>Conversaciones
+            {totalUnread > 0 && <span className="pill-tone tone-coral" style={{ marginLeft: 10, verticalAlign: 'middle' }}>{totalUnread} sin leer</span>}
+          </h1>
+        </div>
+        <button className="btn btn-primary"><I.Edit size={14}/> Nuevo mensaje</button>
+      </div>
+
+      <div className="chat-wrap">
+        <div className="chat-list">
+          <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--separator)' }}>
+            <div style={{ position: 'relative', marginBottom: 10 }}>
+              <I.Search size={14} {...{ style: { position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-3)' } } as any}/>
+              <input className="input" value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar conversación…" style={{ width: '100%', paddingLeft: 34, height: 34, fontSize: 13 }}/>
+            </div>
+            <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+              <button className={'chip ' + (filter === 'all' ? 't-accent' : 't-mono')} style={{ cursor: 'pointer', height: 26 }} onClick={() => setFilter('all')}>Todos</button>
+              {CONV_KINDS.map(k => (
+                <button key={k.id} className={'chip ' + (filter === k.id ? 't-accent' : 't-mono')} style={{ cursor: 'pointer', height: 26 }} onClick={() => setFilter(k.id)}>
+                  <k.icon size={11}/> {k.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="chat-list-scroll">
+            {grouped.map(g => (
+              <div key={g.id}>
+                <div className="chat-cat-label">{g.label}</div>
+                {g.items.map(c => (
+                  <button key={c.id} className={'chat-conv' + (c.id === activeId ? ' is-active' : '')} onClick={() => setActiveId(c.id)}>
+                    <ConvAvatar conv={c}/>
+                    <div className="chat-conv-body">
+                      <div className="row-between" style={{ gap: 8 }}>
+                        <span className="chat-conv-name">{c.name}</span>
+                        <span style={{ fontSize: 11, color: 'var(--text-4)', flexShrink: 0 }}>{c.when}</span>
+                      </div>
+                      <div className="row-between" style={{ gap: 8 }}>
+                        <span className="chat-conv-prev">{c.preview}</span>
+                        {c.unread > 0 && (
+                          <span style={{
+                            minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, flexShrink: 0,
+                            background: 'var(--accent)', color: 'var(--on-accent)', fontSize: 10.5, fontWeight: 700,
+                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                            fontFamily: "'Geist Mono', monospace",
+                          }}>{c.unread}</span>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ))}
+            {grouped.length === 0 && (
+              <div style={{ padding: 32, textAlign: 'center', fontSize: 13, color: 'var(--text-3)' }}>Sin conversaciones.</div>
+            )}
+          </div>
+        </div>
+
+        <div className="chat-main">
+          <div className="row-between" style={{ padding: '12px 20px', borderBottom: '1px solid var(--separator)', background: 'var(--surface)' }}>
+            <div className="row" style={{ gap: 12 }}>
+              <ConvAvatar conv={active} size={38}/>
+              <div>
+                <div style={{ fontSize: 14.5, fontWeight: 700, letterSpacing: '-0.01em' }}>{active.name}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{active.kind === 'direct' ? 'Mensaje directo' : `${active.members} miembros`}</div>
+              </div>
+            </div>
+            <div className="row" style={{ gap: 4 }}>
+              <button className="icon-btn" title="Buscar"><I.Search size={15}/></button>
+              {active.kind !== 'direct' && <button className="icon-btn" title="Miembros"><I.People size={15}/></button>}
+              <button className="icon-btn" title="Más"><I.Dots size={15}/></button>
+            </div>
+          </div>
+
+          <div className="chat-thread" ref={threadRef}>
+            <div style={{ alignSelf: 'center', fontSize: 11, color: 'var(--text-4)', background: 'var(--surface-2)', padding: '4px 12px', borderRadius: 999, marginBottom: 4 }}>
+              {active.kind === 'service' ? 'Chat del servicio · 31 May' : active.kind === 'direct' ? 'Conversación privada' : 'Grupo de equipo'}
+            </div>
+            {liveMsgs.map((m, i) => {
+              const mine = m.who === 'me'
+              const prev = liveMsgs[i - 1]
+              const showName = !mine && active.kind !== 'direct' && (!prev || prev.who !== m.who)
+              return (
+                <div key={i}>
+                  {showName && <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-3)', margin: '10px 0 -4px 52px' }}>{m.who}</div>}
+                  <div className={'bubble-row' + (mine ? ' mine' : '')}>
+                    {!mine
+                      ? <div className="av av-sm" data-c={(m as any).c || active.c} style={{ alignSelf: 'flex-end' }}>{initialsMsg(m.who)}</div>
+                      : <div style={{ width: 22 }}/>}
+                    <div>
+                      <div className="bubble">{m.t}</div>
+                      <div className="bubble-meta" style={{ textAlign: mine ? 'right' : 'left' }}>{m.when}</div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          <div className="chat-composer">
+            <button className="icon-btn" title="Adjuntar"><I.Plus size={18}/></button>
+            <textarea className="chat-input" rows={1} value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
+              placeholder={`Escribe a ${active.name}…`}/>
+            <button className="btn btn-primary" style={{ height: 42, width: 42, padding: 0, justifyContent: 'center', borderRadius: 13 }} onClick={send}>
+              <I.Send size={16}/>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Media() {
   const [view, setView] = useState<'grid' | 'list'>('grid')
   const folders = [
@@ -1678,7 +2430,7 @@ function Personas({ slug, allTeams, onOpenPerson, onOpenTeam }: {
   const [fTeam, setFTeam] = useState('')
   const [view, setView] = useState<'list' | 'grid'>('list')
 
-  const teams = useMemo(() => Array.from(new Set(data.map(p => p.team))), [data])
+  const teamFilterOpts = useMemo(() => Array.from(new Set(data.map(p => p.team))), [data])
   const filtered = data.filter(p => {
     if (fRole && p.role !== fRole) return false
     if (fTeam && p.team !== fTeam) return false
@@ -1691,7 +2443,7 @@ function Personas({ slug, allTeams, onOpenPerson, onOpenTeam }: {
     return true
   })
 
-  const totalTeams = teams.length
+  const totalTeams = allTeams.length
 
   return (
     <div className="content route-enter">
@@ -1750,7 +2502,7 @@ function Personas({ slug, allTeams, onOpenPerson, onOpenTeam }: {
                 value={search} onChange={e => setSearch(e.target.value)}
                 style={{ paddingLeft: 30, width: 240, height: 32, fontSize: 13 }}/>
             </div>
-            <FilterSelect value={fTeam}   onChange={setFTeam}   options={[{v:'',l:'Todos los equipos'}, ...teams.map(t => ({v:t,l:t}))]}/>
+            <FilterSelect value={fTeam}   onChange={setFTeam}   options={[{v:'',l:'Todos los equipos'}, ...teamFilterOpts.map(t => ({v:t,l:t}))]}/>
             <FilterSelect value={fRole}   onChange={setFRole}   options={[{v:'',l:'Todos los roles'},{v:'admin',l:'Admin'},{v:'leader',l:'Líder'},{v:'member',l:'Miembro'}]}/>
             <FilterSelect value={fActive} onChange={setFActive} options={[{v:'',l:'Cualquier estado'},{v:'active',l:'Activos'},{v:'inactive',l:'Inactivos'}]}/>
             <div className="seg">
@@ -1918,6 +2670,688 @@ function adaptPerson(raw: any): PersonaP {
     lastSeen: raw?.last_seen_at ? new Date(raw.last_seen_at).toLocaleDateString('es-ES') : '—',
     joined: raw?.welcomed_at ? new Date(raw.welcomed_at).toLocaleDateString('es-ES') : '—',
   }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// V2 portal modals — Modal · EmailModalV2 · TemplatesModalV2 · NewServiceModal
+// All portal to document.body; styled via .tenant-v2 .modal-*
+// ═════════════════════════════════════════════════════════════════════════════
+
+const EMAIL_VARIABLES: { token: string; label: string }[] = [
+  { token: '{{ to.first_name }}',     label: 'Nombre de pila' },
+  { token: '{{ to.last_name }}',      label: 'Apellido' },
+  { token: '{{ to.email }}',          label: 'Email' },
+  { token: '{{ organization.name }}', label: 'Nombre de la iglesia' },
+  { token: '{{ service.name }}',      label: 'Tipo de servicio' },
+  { token: '{{ plan.date }}',         label: 'Fecha del plan' },
+  { token: '{{ sender.name }}',       label: 'Quien envía' },
+]
+type TplKind = 'general' | 'schedule' | 'signup' | 'welcome' | 'team_welcome'
+const TPL_CATS: { id: TplKind; l: string }[] = [
+  { id: 'general',      l: 'General' },
+  { id: 'schedule',     l: 'Programación' },
+  { id: 'signup',       l: 'Hojas de inscripción' },
+  { id: 'welcome',      l: 'Bienvenida' },
+  { id: 'team_welcome', l: 'Bienvenida a equipo' },
+]
+const TPL_DESC: Record<string, string> = {
+  general:      'Plantillas de uso general — se envían manualmente desde cualquier ficha.',
+  schedule:     'Se envían al solicitar disponibilidad o publicar un plan de servicio.',
+  signup:       'Se envían cuando se abre una hoja de inscripción del equipo.',
+  welcome:      'Bienvenida al portal — se envía al añadir una persona nueva.',
+  team_welcome: 'Bienvenida a un equipo concreto — se envía al añadir a una posición.',
+}
+
+function ModalShell({ width = 560, onClose, children }: { width?: number; onClose: () => void; children: React.ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  const node = (
+    <div className="tenant-v2">
+      <div className="modal-backdrop" onClick={onClose}>
+        <div className="modal" style={{ maxWidth: width }} role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}>
+          {children}
+        </div>
+      </div>
+    </div>
+  )
+  return createPortal(node, document.body)
+}
+
+function VariableMenuV2({ onInsert }: { onInsert: (token: string) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{ position: 'relative' }}>
+      <button className="btn btn-secondary btn-sm" onClick={() => setOpen(o => !o)}>
+        <span className="mono" style={{ fontSize: 13 }}>{'{}'}</span> Variable
+      </button>
+      {open && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 10 }} onClick={() => setOpen(false)} />
+          <div style={{
+            position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 11,
+            width: 240, background: 'var(--surface)', border: '1px solid var(--separator)',
+            borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-3)', overflow: 'hidden', padding: 6,
+          }}>
+            {EMAIL_VARIABLES.map(v => (
+              <button key={v.token} className="list-row" style={{ width: '100%', textAlign: 'left', borderRadius: 8, border: 0, padding: '8px 10px', background: 'transparent', cursor: 'pointer' }}
+                onClick={() => { onInsert(v.token); setOpen(false) }}>
+                <div className="list-body">
+                  <div className="mono" style={{ fontSize: 12, color: 'var(--accent)', fontWeight: 600 }}>{v.token}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1 }}>{v.label}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+interface ApiTpl { id: string; kind: string; name: string; subject: string; body: string; is_default: boolean }
+
+function EmailModalV2({ slug, recipient, contextTeamId, autoApplyKind, onClose, onSent }: {
+  slug: string;
+  recipient: ServicePerson;
+  contextTeamId?: string;
+  autoApplyKind?: TplKind | 'password_reset';
+  onClose: () => void;
+  onSent: () => void;
+}) {
+  const [tpls, setTpls] = useState<ApiTpl[]>([])
+  const [tplId, setTplId] = useState('')
+  const [subject, setSubject] = useState('')
+  const [body, setBody] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [showTpl, setShowTpl] = useState(false)
+  const [preview, setPreview] = useState<{ subject: string; body: string } | null>(null)
+  const [sent, setSent] = useState(false)
+  const [err, setErr] = useState('')
+
+  const reloadTpls = useCallback(async () => {
+    const r = await api(`/api/v1/tenant/${slug}/email/templates`)
+    setTpls(r.ok ? await r.json() : [])
+  }, [slug])
+  useEffect(() => { reloadTpls() }, [reloadTpls])
+
+  // Auto-apply default template of kind on first load
+  useEffect(() => {
+    if (!autoApplyKind || tpls.length === 0 || tplId) return
+    const cand = tpls.find(t => t.kind === autoApplyKind && t.is_default) || tpls.find(t => t.kind === autoApplyKind)
+    if (cand) applyTpl(cand.id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoApplyKind, tpls])
+
+  function applyTpl(id: string) {
+    setTplId(id)
+    if (!id) { setSubject(''); setBody(''); return }
+    const t = tpls.find(x => x.id === id)
+    if (t) { setSubject(t.subject); setBody(t.body) }
+  }
+
+  async function doPreview() {
+    setErr('')
+    const r = await api(`/api/v1/tenant/${slug}/email/messages/preview`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipient_member_id: recipient.member_id,
+        template_id: tplId || undefined,
+        subject, body,
+        ...(contextTeamId ? { team_id: contextTeamId } : {}),
+      }),
+    })
+    if (r.ok) setPreview(await r.json())
+    else { const j = await r.json().catch(() => ({})); setErr((j as any).detail || 'Error en vista previa') }
+  }
+
+  async function send() {
+    setErr(''); setBusy(true)
+    try {
+      const r = await api(`/api/v1/tenant/${slug}/email/messages`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipient_member_ids: [recipient.member_id],
+          template_id: tplId || undefined,
+          subject, body,
+          ...(contextTeamId ? { team_id: contextTeamId } : {}),
+        }),
+      })
+      if (r.ok) { setSent(true); setTimeout(() => { onSent(); onClose() }, 1100) }
+      else { const j = await r.json().catch(() => ({})); setErr((j as any).detail || 'Error al enviar') }
+    } finally { setBusy(false) }
+  }
+
+  if (showTpl) {
+    return <TemplatesModalV2 slug={slug} onBack={() => setShowTpl(false)} onClose={onClose}
+      onPick={(id) => { applyTpl(id); setShowTpl(false) }}
+      onChanged={reloadTpls}/>
+  }
+  if (preview) {
+    return (
+      <ModalShell width={680} onClose={() => setPreview(null)}>
+        <div className="modal-head">
+          <div className="modal-title">Vista previa</div>
+          <button className="icon-btn" onClick={() => setPreview(null)}><I.X size={16}/></button>
+        </div>
+        <div className="modal-body">
+          <div style={{ marginBottom: 12 }}><b style={{ fontSize: 13 }}>Asunto:</b> <span style={{ fontSize: 13 }}>{preview.subject}</span></div>
+          <div style={{ padding: 16, background: 'var(--surface-2)', borderRadius: 'var(--radius-sm)', fontSize: 13.5, lineHeight: 1.55, whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: preview.body }}/>
+        </div>
+        <div className="modal-foot">
+          <button className="btn btn-ghost" onClick={() => setPreview(null)}>Volver</button>
+          <span style={{ flex: 1 }}/>
+          <button className="btn btn-primary" disabled={busy} onClick={send}><I.Send size={14}/> Enviar 1</button>
+        </div>
+      </ModalShell>
+    )
+  }
+
+  return (
+    <ModalShell width={760} onClose={onClose}>
+      <div className="modal-head">
+        <div className="modal-title">Enviar correo</div>
+        <button className="icon-btn" onClick={onClose}><I.X size={16}/></button>
+      </div>
+      <div className="modal-body">
+        <div className="row" style={{ gap: 10, marginBottom: 16 }}>
+          <div style={{ position: 'relative', flex: 1 }}>
+            <select value={tplId} onChange={e => applyTpl(e.target.value)} style={{
+              width: '100%', height: 40, padding: '0 36px 0 14px', borderRadius: 'var(--radius-sm)',
+              background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--hairline)',
+              fontSize: 13.5, cursor: 'pointer', appearance: 'none', fontFamily: 'inherit',
+              backgroundImage: "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238E8E93' stroke-width='2'><polyline points='6 9 12 15 18 9'/></svg>\")",
+              backgroundRepeat: 'no-repeat', backgroundPosition: 'right 12px center',
+            }}>
+              <option value="">— Sin plantilla (empezar en blanco) —</option>
+              {TPL_CATS.map(c => {
+                const list = tpls.filter(t => t.kind === c.id)
+                if (list.length === 0) return null
+                return (
+                  <optgroup key={c.id} label={c.l}>
+                    {list.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </optgroup>
+                )
+              })}
+            </select>
+          </div>
+          <button className="btn btn-secondary" onClick={() => setShowTpl(true)}>Editar plantillas ›</button>
+        </div>
+
+        <div style={{ padding: '12px 14px', borderRadius: 'var(--radius-sm)', marginBottom: 16, background: 'var(--surface-2)', border: '1px solid var(--separator)' }}>
+          <span style={{ fontWeight: 700, fontSize: 13.5 }}>Para: {recipient.full_name || recipient.email}</span>{' '}
+          <span className="mono" style={{ fontSize: 12.5, color: 'var(--text-3)' }}>&lt;{recipient.email}&gt;</span>
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <div className="row-between" style={{ marginBottom: 7 }}>
+            <span className="field-label" style={{ margin: 0 }}>Asunto</span>
+            <VariableMenuV2 onInsert={t => setSubject(s => (s ? s + ' ' : '') + t)}/>
+          </div>
+          <input className="input" value={subject} onChange={e => setSubject(e.target.value)}
+            placeholder="p. ej. ¡Bienvenido(a) a {{ organization.name }}!" style={{ width: '100%', height: 40 }}/>
+        </div>
+
+        <div>
+          <div className="row-between" style={{ marginBottom: 7 }}>
+            <span className="field-label" style={{ margin: 0 }}>Cuerpo</span>
+          </div>
+          <div className="rt-toolbar">
+            <button className="rt-btn" tabIndex={-1}><b>B</b></button>
+            <button className="rt-btn" tabIndex={-1}><i>I</i></button>
+            <button className="rt-btn" tabIndex={-1}><u>U</u></button>
+            <span className="rt-sep"/>
+            <button className="rt-btn" tabIndex={-1}>•≡</button>
+            <button className="rt-btn" tabIndex={-1}>1.</button>
+            <span className="rt-sep"/>
+            <button className="rt-btn" tabIndex={-1}>⇤</button>
+            <button className="rt-btn" tabIndex={-1}>⇥</button>
+            <span className="rt-sep"/>
+            <button className="rt-btn" tabIndex={-1}>🔗</button>
+            <button className="rt-btn" tabIndex={-1}>Tx</button>
+            <span style={{ flex: 1 }}/>
+            <VariableMenuV2 onInsert={t => setBody(b => (b ? b + ' ' : '') + t)}/>
+          </div>
+          <textarea className="rt-area" value={body} onChange={e => setBody(e.target.value)} placeholder="Hola {{ to.first_name }}, …"/>
+        </div>
+
+        {err && (
+          <div style={{ marginTop: 14, padding: '10px 12px', borderRadius: 10, background: 'color-mix(in oklab, var(--danger) 12%, transparent)', color: 'var(--danger)', fontSize: 13, fontWeight: 600 }}>
+            {err}
+          </div>
+        )}
+        {sent && (
+          <div className="row" style={{ gap: 8, marginTop: 14, padding: '10px 12px', borderRadius: 10, background: 'var(--accent-2-tint)', color: 'var(--success)', fontSize: 13, fontWeight: 600 }}>
+            <I.Check size={14}/> Correo enviado a {recipient.full_name || recipient.email}.
+          </div>
+        )}
+      </div>
+      <div className="modal-foot">
+        <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+        <span style={{ flex: 1 }}/>
+        <button className="btn btn-secondary" onClick={doPreview} disabled={busy}><I.Eye size={14}/> Vista previa</button>
+        <button className="btn btn-primary" onClick={send} disabled={busy || !subject.trim() || !body.trim()}><I.Send size={14}/> Enviar 1</button>
+      </div>
+    </ModalShell>
+  )
+}
+
+function TemplatesModalV2({ slug, onBack, onClose, onPick, onChanged }: {
+  slug: string;
+  onBack: () => void;
+  onClose: () => void;
+  onPick?: (id: string) => void;
+  onChanged: () => void;
+}) {
+  const [cat, setCat] = useState<TplKind>('welcome')
+  const [tpls, setTpls] = useState<ApiTpl[]>([])
+  const [editing, setEditing] = useState<ApiTpl | null>(null)
+
+  const reload = useCallback(async () => {
+    const r = await api(`/api/v1/tenant/${slug}/email/templates`)
+    setTpls(r.ok ? await r.json() : [])
+  }, [slug])
+  useEffect(() => { reload() }, [reload])
+
+  const list = tpls.filter(t => t.kind === cat)
+
+  async function del(t: ApiTpl) {
+    if (!confirm(`¿Eliminar la plantilla "${t.name}"?`)) return
+    const r = await api(`/api/v1/tenant/${slug}/email/templates/${t.id}`, { method: 'DELETE' })
+    if (r.ok) { reload(); onChanged() }
+  }
+
+  if (editing) {
+    return <TemplateEditorV2 slug={slug} initial={editing.id === '__new__' ? null : editing} kind={cat}
+      onSaved={() => { setEditing(null); reload(); onChanged() }}
+      onClose={() => setEditing(null)}/>
+  }
+
+  return (
+    <ModalShell width={620} onClose={onClose}>
+      <div className="modal-head" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+        <div className="row-between">
+          <button className="btn btn-ghost btn-sm" style={{ paddingLeft: 0, letterSpacing: 0.06, textTransform: 'uppercase', fontSize: 11, color: 'var(--text-3)' }} onClick={onBack}>
+            <I.ChevLeft size={12}/> Enviar correo
+          </button>
+          <button className="icon-btn" onClick={onClose}><I.X size={16}/></button>
+        </div>
+        <div className="modal-title">Plantillas de email</div>
+      </div>
+      <div className="modal-body">
+        <div className="seg" style={{ width: '100%', marginBottom: 16 }}>
+          {TPL_CATS.map(c => (
+            <button key={c.id} className={'seg-btn' + (cat === c.id ? ' is-active' : '')} style={{ flex: 1 }} onClick={() => setCat(c.id)}>{c.l}</button>
+          ))}
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--text-3)', marginBottom: 16, lineHeight: 1.5 }}>{TPL_DESC[cat]}</p>
+        <div className="stack" style={{ gap: 10 }}>
+          {list.length === 0 && (
+            <div style={{ padding: '28px 16px', textAlign: 'center', fontSize: 13, color: 'var(--text-3)', border: '1.5px dashed var(--hairline)', borderRadius: 'var(--radius-md)' }}>
+              Aún no hay plantillas en esta categoría.
+            </div>
+          )}
+          {list.map(t => (
+            <div key={t.id} className="row" style={{ gap: 12, padding: 14, borderRadius: 'var(--radius-md)', border: '1px solid var(--separator)', background: 'var(--surface)' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="row" style={{ gap: 8 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: '-0.01em' }}>{t.name}</span>
+                  {t.is_default && <span className="pill-tone tone-blue" style={{ height: 18, fontSize: 10 }}>por defecto</span>}
+                </div>
+                <div className="mono" style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.body}</div>
+              </div>
+              <div className="row" style={{ gap: 6, flexShrink: 0 }}>
+                {onPick && <button className="btn btn-secondary btn-sm" onClick={() => onPick(t.id)}>Usar</button>}
+                <button className="btn btn-secondary btn-sm" onClick={() => setEditing(t)}>Editar</button>
+                <button className="btn btn-secondary btn-sm" style={{ color: 'var(--danger)', borderColor: 'color-mix(in oklab, var(--danger) 30%, transparent)' }} onClick={() => del(t)}>Eliminar</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="modal-foot">
+        <button className="btn btn-ghost" onClick={onBack}>Cerrar</button>
+        <span style={{ flex: 1 }}/>
+        <button className="btn btn-primary" onClick={() => setEditing({ id: '__new__', kind: cat, name: '', subject: '', body: '', is_default: false })}>
+          <I.Plus size={14}/> Nueva plantilla {TPL_CATS.find(c => c.id === cat)?.l}
+        </button>
+      </div>
+    </ModalShell>
+  )
+}
+
+function TemplateEditorV2({ slug, initial, kind, onSaved, onClose }: {
+  slug: string; initial: ApiTpl | null; kind: string;
+  onSaved: () => void; onClose: () => void;
+}) {
+  const [name, setName] = useState(initial?.name || '')
+  const [subject, setSubject] = useState(initial?.subject || '')
+  const [body, setBody] = useState(initial?.body || '')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  async function save() {
+    if (!name.trim()) { setErr('Nombre requerido'); return }
+    setBusy(true); setErr('')
+    try {
+      const url = initial
+        ? `/api/v1/tenant/${slug}/email/templates/${initial.id}`
+        : `/api/v1/tenant/${slug}/email/templates`
+      const r = await api(url, {
+        method: initial ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, name, subject, body }),
+      })
+      if (r.ok) onSaved()
+      else { const j = await r.json().catch(() => ({})); setErr((j as any).detail || 'Error') }
+    } finally { setBusy(false) }
+  }
+  return (
+    <ModalShell width={640} onClose={onClose}>
+      <div className="modal-head">
+        <div className="modal-title">{initial ? 'Editar plantilla' : 'Nueva plantilla'}</div>
+        <button className="icon-btn" onClick={onClose}><I.X size={16}/></button>
+      </div>
+      <div className="modal-body">
+        <div style={{ marginBottom: 14 }}>
+          <label className="field-label">Nombre</label>
+          <input className="input" value={name} onChange={e => setName(e.target.value)} style={{ width: '100%', height: 40 }}/>
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <div className="row-between" style={{ marginBottom: 7 }}>
+            <span className="field-label" style={{ margin: 0 }}>Asunto</span>
+            <VariableMenuV2 onInsert={t => setSubject(s => (s ? s + ' ' : '') + t)}/>
+          </div>
+          <input className="input" value={subject} onChange={e => setSubject(e.target.value)} style={{ width: '100%', height: 40 }}/>
+        </div>
+        <div>
+          <div className="row-between" style={{ marginBottom: 7 }}>
+            <span className="field-label" style={{ margin: 0 }}>Cuerpo</span>
+            <VariableMenuV2 onInsert={t => setBody(b => (b ? b + ' ' : '') + t)}/>
+          </div>
+          <textarea className="rt-area" value={body} onChange={e => setBody(e.target.value)} style={{ borderRadius: 'var(--radius-sm)' }}/>
+        </div>
+        {err && <div style={{ marginTop: 12, color: 'var(--danger)', fontSize: 13 }}>{err}</div>}
+      </div>
+      <div className="modal-foot">
+        <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+        <span style={{ flex: 1 }}/>
+        <button className="btn btn-primary" disabled={busy} onClick={save}><I.Check size={14}/> Guardar</button>
+      </div>
+    </ModalShell>
+  )
+}
+
+const SERVICE_COLORS: { id: string; name: string; hex: string }[] = [
+  { id: 'blue',   name: 'Azul',     hex: '#0A84FF' },
+  { id: 'green',  name: 'Verde',    hex: '#34C759' },
+  { id: 'orange', name: 'Naranja',  hex: '#FF9500' },
+  { id: 'purple', name: 'Morado',   hex: '#AF52DE' },
+  { id: 'red',    name: 'Rojo',     hex: '#FF3B30' },
+  { id: 'pink',   name: 'Rosa',     hex: '#FF2D55' },
+  { id: 'teal',   name: 'Turquesa', hex: '#30C9C9' },
+  { id: 'indigo', name: 'Índigo',   hex: '#5E5CE6' },
+]
+
+type Recurrence = 'none' | 'random' | 'daily' | 'weekly' | 'weekdays' | 'biweekly' | 'monthly'
+const RECUR_OPTIONS: { v: Recurrence; label: string; hint: string }[] = [
+  { v: 'weekly',   label: 'Semanal',         hint: 'Cada semana en el mismo día' },
+  { v: 'biweekly', label: 'Cada 2 semanas',  hint: 'Quincenal' },
+  { v: 'monthly',  label: 'Mensual',         hint: 'Una vez al mes' },
+  { v: 'weekdays', label: 'Días laborables', hint: 'Lunes a viernes' },
+  { v: 'daily',    label: 'Diario',          hint: 'Todos los días' },
+  { v: 'random',   label: 'Aleatorio',       hint: 'Fecha única, sin repetición' },
+  { v: 'none',     label: 'Sin repetición',  hint: 'Un solo servicio' },
+]
+function nextSundayISO(): string {
+  const d = new Date()
+  const dow = d.getDay()
+  const days = dow === 0 ? 7 : 7 - dow
+  d.setDate(d.getDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+interface ServiceTimeIn { starts_on: string; start_time: string; end_time: string }
+
+function StepDot({ n, label, active, done }: { n: number; label: string; active: boolean; done: boolean }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: done || active ? 1 : 0.55 }}>
+      <span style={{
+        width: 24, height: 24, borderRadius: 99, display: 'grid', placeItems: 'center',
+        fontSize: 12, fontWeight: 700,
+        background: active ? 'var(--accent)' : done ? 'var(--success)' : 'var(--surface-3)',
+        color: active || done ? '#fff' : 'var(--text-3)',
+      }}>{done ? <I.Check size={12}/> : n}</span>
+      <span style={{ fontSize: 13, fontWeight: 600, color: active ? 'var(--text)' : 'var(--text-3)' }}>{label}</span>
+    </div>
+  )
+}
+
+function NewServiceModal({ slug, teams, onClose, onCreated }: {
+  slug: string; teams: Team[]; onClose: () => void; onCreated: (st: ServiceType) => void;
+}) {
+  const [step, setStep] = useState<1 | 2 | 3>(1)
+  const [name, setName] = useState('')
+  const [recurrence, setRecurrence] = useState<Recurrence>('weekly')
+  const [colorId, setColorId] = useState('blue')
+  const [times, setTimes] = useState<ServiceTimeIn[]>([{ starts_on: nextSundayISO(), start_time: '11:00', end_time: '12:30' }])
+  const [teamIds, setTeamIds] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const sel = SERVICE_COLORS.find(c => c.id === colorId) || SERVICE_COLORS[0]
+
+  function next() {
+    setErr('')
+    if (step === 1) {
+      if (!name.trim()) { setErr('Indica un nombre'); return }
+      setStep(2)
+    } else if (step === 2) {
+      if (times.length === 0) { setErr('Añade al menos un horario'); return }
+      for (const t of times) {
+        if (!t.starts_on || !t.start_time || !t.end_time) { setErr('Completa todos los horarios'); return }
+        if (t.end_time <= t.start_time) { setErr('La hora de fin debe ser posterior a la de inicio'); return }
+      }
+      setStep(3)
+    }
+  }
+  function back() { setErr(''); if (step > 1) setStep((step - 1) as 1 | 2) }
+
+  async function submit() {
+    setBusy(true); setErr('')
+    try {
+      const r = await api(`/api/v1/tenant/${slug}/services/types`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: name.trim(),
+          color: sel.hex,
+          recurrence,
+          times,
+          team_ids: teamIds,
+        }),
+      })
+      if (r.ok) { onCreated(await r.json()); onClose() }
+      else { const j = await r.json().catch(() => ({})); setErr((j as any).detail || 'Error al crear'); setBusy(false) }
+    } catch (e: any) { setErr(e?.message || 'Error'); setBusy(false) }
+  }
+
+  function updateTime(i: number, patch: Partial<ServiceTimeIn>) {
+    setTimes(prev => prev.map((t, idx) => idx === i ? { ...t, ...patch } : t))
+  }
+  function addTime() {
+    const last = times[times.length - 1]
+    setTimes(prev => [...prev, { starts_on: last?.starts_on || nextSundayISO(), start_time: '08:00', end_time: '09:00' }])
+  }
+  function removeTime(i: number) {
+    setTimes(prev => prev.filter((_, idx) => idx !== i))
+  }
+  function toggleTeam(id: string) {
+    setTeamIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
+
+  const recurLabel = RECUR_OPTIONS.find(o => o.v === recurrence)?.label || 'Semanal'
+
+  return (
+    <ModalShell width={680} onClose={onClose}>
+      <div className="modal-head" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 14 }}>
+        <div className="row-between">
+          <div className="modal-title">Nuevo servicio</div>
+          <button className="icon-btn" onClick={onClose}><I.X size={16}/></button>
+        </div>
+        <div className="row" style={{ alignItems: 'center', gap: 14 }}>
+          <StepDot n={1} label="Detalles" active={step === 1} done={step > 1}/>
+          <span style={{ flex: 1, height: 1, background: 'var(--separator)' }}/>
+          <StepDot n={2} label="Horarios" active={step === 2} done={step > 2}/>
+          <span style={{ flex: 1, height: 1, background: 'var(--separator)' }}/>
+          <StepDot n={3} label="Equipos" active={step === 3} done={false}/>
+        </div>
+      </div>
+
+      <div className="modal-body">
+        {/* Live banner preview (always visible) */}
+        <div className="svc-ribbon" style={{
+          borderRadius: 'var(--radius-md)', marginBottom: 20, minHeight: 92,
+          background: `linear-gradient(135deg, ${sel.hex}, color-mix(in oklab, ${sel.hex} 70%, #000))`,
+        }}>
+          <div className="svc-ribbon-deco"/>
+          <div className="svc-ribbon-deco b"/>
+          <div style={{ flex: 1, position: 'relative', zIndex: 2 }}>
+            <div className="svc-ribbon-sub">{recurLabel}</div>
+            <div className="svc-ribbon-title">{name || 'Nombre del servicio'}</div>
+          </div>
+        </div>
+
+        {step === 1 && (
+          <>
+            <div style={{ marginBottom: 16 }}>
+              <label className="field-label">Nombre del servicio</label>
+              <input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="p. ej. Servicio Dominical" style={{ width: '100%', height: 40 }} autoFocus/>
+            </div>
+            <div style={{ marginBottom: 18 }}>
+              <label className="field-label">¿Cuándo ocurre?</label>
+              <select value={recurrence} onChange={e => setRecurrence(e.target.value as Recurrence)} style={{
+                width: '100%', height: 40, padding: '0 36px 0 14px', borderRadius: 'var(--radius-sm)',
+                background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--hairline)',
+                fontSize: 13.5, cursor: 'pointer', appearance: 'none', fontFamily: 'inherit',
+                backgroundImage: "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238E8E93' stroke-width='2'><polyline points='6 9 12 15 18 9'/></svg>\")",
+                backgroundRepeat: 'no-repeat', backgroundPosition: 'right 12px center',
+              }}>
+                {RECUR_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+              </select>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>{RECUR_OPTIONS.find(o => o.v === recurrence)?.hint}</div>
+            </div>
+            <div>
+              <label className="field-label">Color del banner</label>
+              <div className="swatch-grid">
+                {SERVICE_COLORS.map(c => (
+                  <button key={c.id} className={'swatch' + (colorId === c.id ? ' is-active' : '')}
+                    onClick={() => setColorId(c.id)} title={c.name}
+                    style={{ background: c.hex, color: c.hex }}/>
+                ))}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 10 }}>
+                Seleccionado: <b style={{ color: 'var(--text-2)' }}>{sel.name}</b> — el fondo del banner usará este color en toda la app.
+              </div>
+            </div>
+          </>
+        )}
+
+        {step === 2 && (
+          <>
+            <p style={{ fontSize: 13, color: 'var(--text-3)', margin: '0 0 14px', lineHeight: 1.55 }}>
+              Selecciona el día y la franja horaria. Por defecto comenzamos el <b style={{ color: 'var(--text-2)' }}>próximo domingo</b>.
+              Puedes añadir varios horarios para el mismo día o para días distintos.
+            </p>
+            <div className="stack" style={{ gap: 10 }}>
+              {times.map((t, i) => (
+                <div key={i} style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 90px) auto minmax(0, 90px) auto',
+                  alignItems: 'center', gap: 8,
+                  padding: '10px 12px', background: 'var(--surface-2)',
+                  borderRadius: 'var(--radius-sm)', border: '1px solid var(--separator)',
+                }}>
+                  <input type="date" className="input" value={t.starts_on}
+                    onChange={e => updateTime(i, { starts_on: e.target.value })}
+                    style={{ minWidth: 0, height: 36, width: '100%' }}/>
+                  <span style={{ fontSize: 12, color: 'var(--text-3)' }}>de</span>
+                  <input type="time" className="input" value={t.start_time}
+                    onChange={e => updateTime(i, { start_time: e.target.value })}
+                    style={{ minWidth: 0, height: 36, width: '100%' }}/>
+                  <span style={{ fontSize: 12, color: 'var(--text-3)' }}>a</span>
+                  <input type="time" className="input" value={t.end_time}
+                    onChange={e => updateTime(i, { end_time: e.target.value })}
+                    style={{ minWidth: 0, height: 36, width: '100%' }}/>
+                  {times.length > 1
+                    ? <button className="icon-btn" onClick={() => removeTime(i)} title="Quitar"><I.X size={14}/></button>
+                    : <span style={{ width: 28 }}/>}
+                </div>
+              ))}
+            </div>
+            <button className="btn btn-ghost btn-sm" onClick={addTime} style={{ marginTop: 12 }}>
+              <I.Plus size={12}/> Añadir otro horario
+            </button>
+            <p style={{ fontSize: 11.5, color: 'var(--text-4)', margin: '14px 0 0', fontStyle: 'italic' }}>
+              * Si tu iglesia tiene dos servicios el mismo día (p. ej. 9 h y 11 h), añade ambos.
+            </p>
+          </>
+        )}
+
+        {step === 3 && (
+          <>
+            <p style={{ fontSize: 13, color: 'var(--text-3)', margin: '0 0 14px', lineHeight: 1.55 }}>
+              Selecciona los equipos que participarán en este servicio. Puedes crearlos en <b style={{ color: 'var(--text-2)' }}>Personas → Equipos</b>.
+            </p>
+            {teams.length === 0 ? (
+              <div className="dropzone" style={{ cursor: 'default' }}>
+                <div style={{ fontSize: 13, color: 'var(--text-3)' }}>
+                  No has creado equipos todavía.<br/>
+                  Puedes crearlos más tarde en la pestaña Personas.
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                {teams.map(t => {
+                  const checked = teamIds.includes(t.id)
+                  return (
+                    <button key={t.id} onClick={() => toggleTeam(t.id)} style={{
+                      display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px',
+                      border: '1.5px solid ' + (checked ? 'var(--accent)' : 'var(--separator)'),
+                      borderRadius: 'var(--radius-md)',
+                      background: checked ? 'var(--accent-tint)' : 'var(--surface)',
+                      cursor: 'pointer', textAlign: 'left', transition: 'border-color 140ms, background 140ms',
+                    }}>
+                      <span style={{ width: 12, height: 12, borderRadius: 4, background: t.color || 'var(--accent)', flexShrink: 0 }}/>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13.5, fontWeight: 600, letterSpacing: '-0.01em' }}>{t.name}</div>
+                        <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>{t.member_count} miembro{t.member_count === 1 ? '' : 's'}</div>
+                      </div>
+                      {checked && <I.Check size={14} {...{ style: { color: 'var(--accent)' } } as any}/>}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </>
+        )}
+
+        {err && (
+          <div style={{ marginTop: 14, padding: '10px 12px', borderRadius: 10, background: 'color-mix(in oklab, var(--danger) 12%, transparent)', color: 'var(--danger)', fontSize: 13, fontWeight: 600 }}>
+            {err}
+          </div>
+        )}
+      </div>
+
+      <div className="modal-foot">
+        <button className="btn btn-ghost" onClick={step === 1 ? onClose : back}>
+          {step === 1 ? 'Cancelar' : <><I.ChevLeft size={12}/> Atrás</>}
+        </button>
+        <span style={{ flex: 1 }}/>
+        {step < 3
+          ? <button className="btn btn-primary" onClick={next}>Siguiente <I.Chev size={12}/></button>
+          : <button className="btn btn-primary" onClick={submit} disabled={busy}><I.Check size={14}/> {busy ? 'Creando…' : 'Crear servicio'}</button>}
+      </div>
+    </ModalShell>
+  )
 }
 
 const SERVICE_ROLE_LABEL_FULL: Record<ServiceRole, string> = {
@@ -2300,27 +3734,13 @@ function TeamAdderInline({ slug, person, allTeams, excludeIds, onAdded }: {
 function PersonaComunicacion({ slug, person, p }: { slug: string; person: ServicePerson; p: PersonaP }) {
   const [box, setBox] = useState<'recibidos' | 'enviados'>('recibidos')
   const [msgs, setMsgs] = useState<EmailMessage[]>([])
-  const [composeOpen, setComposeOpen] = useState(false)
-  const [sendingReset, setSendingReset] = useState(false)
+  const [composeOpen, setComposeOpen] = useState<{ kind?: 'password_reset' } | null>(null)
 
   const reloadMsgs = useCallback(async () => {
     const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/messages`)
     setMsgs(r.ok ? await r.json() : [])
   }, [slug, person.id])
   useEffect(() => { reloadMsgs() }, [reloadMsgs])
-
-  async function sendPasswordReset() {
-    if (!confirm(`¿Enviar email de restablecimiento de contraseña a ${person.full_name || person.email}?\n\nEl enlace caduca en 10 minutos.`)) return
-    setSendingReset(true)
-    try {
-      const r = await api(`/api/v1/tenant/${slug}/services/people/${person.id}/password-reset`, { method: 'POST' })
-      if (!r.ok) { const j = await r.json().catch(() => ({})); alert((j as any).detail || 'Error al enviar'); return }
-      const j = await r.json()
-      alert(`Email enviado a ${j.email}\n\nEl enlace caduca en ${j.expires_minutes} minutos.`)
-      reloadMsgs()
-      setTimeout(reloadMsgs, 2500)
-    } finally { setSendingReset(false) }
-  }
   async function deleteMsg(m: EmailMessage) {
     if (!confirm('¿Eliminar este mensaje de Worsyn?')) return
     const r = await api(`/api/v1/tenant/${slug}/email/messages/${m.id}`, { method: 'DELETE' })
@@ -2333,7 +3753,7 @@ function PersonaComunicacion({ slug, person, p }: { slug: string; person: Servic
     <div className="grid grid-12 rise rise-d2">
       <div className="col-7 stack" style={{ gap: 'var(--gap)' }}>
         <section>
-          <SectionHead title="Mensajes" right={<button className="btn btn-primary btn-sm" onClick={() => setComposeOpen(true)}><I.Plus size={12}/> Nuevo</button>} />
+          <SectionHead title="Mensajes" right={<button className="btn btn-primary btn-sm" onClick={() => setComposeOpen({})}><I.Plus size={12}/> Nuevo</button>} />
           <div className="card">
             <div className="row" style={{ padding: '8px 8px 0', gap: 0, borderBottom: '1px solid var(--separator)' }}>
               {(['recibidos','enviados'] as const).map(id => (
@@ -2371,7 +3791,7 @@ function PersonaComunicacion({ slug, person, p }: { slug: string; person: Servic
           <SectionHead title="Contraseña" info />
           <div className="card">
             <div style={{ padding: 18 }}>
-              <button className="btn btn-primary" disabled={sendingReset} onClick={sendPasswordReset}><I.Send size={14}/> {sendingReset ? 'Enviando…' : 'Enviar email de restablecimiento'}</button>
+              <button className="btn btn-primary" onClick={() => setComposeOpen({ kind: 'password_reset' })}><I.Send size={14}/> Enviar email de restablecimiento</button>
               <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 12, lineHeight: 1.5 }}>
                 La persona recibirá un correo con un enlace para elegir una nueva contraseña. <b style={{ color: 'var(--text-2)' }}>Caduca en 10 minutos</b> — si lo necesita después, reenvíalo desde aquí.
               </div>
@@ -2413,9 +3833,10 @@ function PersonaComunicacion({ slug, person, p }: { slug: string; person: Servic
       </div>
 
       {composeOpen && (
-        <ComposeEmailModal slug={slug} defaultRecipient={person}
-          onClose={() => setComposeOpen(false)}
-          onSent={() => { setComposeOpen(false); reloadMsgs(); setTimeout(reloadMsgs, 2000) }}/>
+        <EmailModalV2 slug={slug} recipient={person}
+          autoApplyKind={composeOpen.kind}
+          onClose={() => setComposeOpen(null)}
+          onSent={() => { reloadMsgs(); setTimeout(reloadMsgs, 2000) }}/>
       )}
     </div>
   )
@@ -3087,20 +4508,39 @@ export default function Servicios({ tab, resetSignal }: { tab: ServiciosTab; res
   const [selectedPerson, setSelectedPerson] = useState<any | null>(null)
   const [selectedTeam, setSelectedTeam] = useState<any | null>(null)
   const [drill, setDrill] = useState<'plan' | 'song' | null>(null)
-  useEffect(() => { setSelectedPerson(null); setSelectedTeam(null); setDrill(null) }, [tab, resetSignal])
+  const [typeConfig, setTypeConfig] = useState<ServiceType | null>(null)
+  useEffect(() => { setSelectedPerson(null); setSelectedTeam(null); setDrill(null); setTypeConfig(null) }, [tab, resetSignal])
 
   const [allTeams, setAllTeams] = useState<Team[]>([])
   const [orgMembers, setOrgMembers] = useState<OrgMemberLite[]>([])
   const [allTypes, setAllTypes] = useState<ServiceType[]>([])
   const [currentMemberId, setCurrentMemberId] = useState<string | null>(null)
+  const [songsCount, setSongsCount] = useState<number>(0)
+  const [planificacionCount, setPlanificacionCount] = useState<number>(0)
   const reloadSharedData = React.useCallback(() => {
     if (!slug) return
     api(`/api/v1/tenant/${slug}/teams`).then(r => r.ok ? r.json() : []).then(setAllTeams).catch(() => {})
     api(`/api/v1/tenant/${slug}/members`).then(r => r.ok ? r.json() : []).then(setOrgMembers).catch(() => {})
     api(`/api/v1/tenant/${slug}/services/types`).then(r => r.ok ? r.json() : []).then(setAllTypes).catch(() => {})
-    api(`/api/v1/tenant/${slug}/auth/me`).then(r => r.ok ? r.json() : null).then(me => setCurrentMemberId(me?.id || null)).catch(() => {})
+    api(`/api/v1/tenant/${slug}/songs`).then(r => r.ok ? r.json() : []).then((x: any[]) => setSongsCount((x || []).length)).catch(() => {})
+    api(`/api/v1/tenant/${slug}/auth/me`).then(r => r.ok ? r.json() : null).then(me => {
+      setCurrentMemberId(me?.id || null)
+      if (me?.id) {
+        const today = new Date().toISOString().slice(0, 10)
+        api(`/api/v1/tenant/${slug}/services/people/${me.id}/assignments?range_from=${today}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(j => setPlanificacionCount(j?.summary?.total ?? 0))
+          .catch(() => {})
+      }
+    }).catch(() => {})
   }, [slug])
   useEffect(() => { reloadSharedData() }, [reloadSharedData])
+  const sidebarCounts: SidebarCounts = {
+    planificacion: planificacionCount,
+    servicios: allTypes.length,
+    canciones: songsCount,
+    personas: orgMembers.length,
+  }
 
   if (tab === 'legacy') return <ServiciosLegacy tab="servicios" resetSignal={resetSignal}/>
 
@@ -3111,9 +4551,11 @@ export default function Servicios({ tab, resetSignal }: { tab: ServiciosTab; res
     'canciones': 'Canciones',
     'media': 'Media',
     'personas': 'Personas',
+    'mensajes': 'Mensajes',
   }
   const crumbs = ['Iglesia', labels[tab as Exclude<ServiciosTab, 'legacy'>]]
   if (tab === 'servicios' && drill === 'plan') crumbs.push('Servicio Dominical · 31 May')
+  if (tab === 'servicios' && typeConfig) crumbs.push(typeConfig.name + ' · Configuración')
   if (tab === 'canciones' && drill === 'song') crumbs.push('Maravilloso es')
   if (tab === 'personas' && selectedPerson) crumbs.push(selectedPerson.full_name || selectedPerson.email)
   if (tab === 'personas' && selectedTeam) crumbs.push(selectedTeam.name)
@@ -3127,13 +4569,26 @@ export default function Servicios({ tab, resetSignal }: { tab: ServiciosTab; res
     <div className="tenant-v2" data-theme={theme} data-style="clean"
       style={{ position: 'fixed', inset: 0, zIndex: 50, overflow: 'auto' }}>
       <div className="app" data-sb={sbMode}>
-        <Sidebar route={tab} onNav={nav} sb={sbMode} onSbToggle={toggleSb} user={user} org={org}/>
+        <Sidebar route={tab} onNav={nav} sb={sbMode} onSbToggle={toggleSb} user={user} org={org} counts={sidebarCounts}/>
         <main style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <Topbar crumbs={crumbs} onSbToggle={toggleSb} onTheme={toggleTheme} theme={theme}/>
           {tab === 'mi-planificacion' && <MiPlanificacion userFirstName={user.firstName} onOpenPlan={() => { setDrill('plan'); window.location.assign(`/portal/${slug}/servicios/servicios`) }}/>}
-          {tab === 'servicios' && (drill === 'plan' ? <PlanDetail onBack={() => setDrill(null)}/> : <ServiciosList onOpenPlan={() => setDrill('plan')}/>)}
+          {tab === 'servicios' && (
+            drill === 'plan'
+              ? <PlanDetail onBack={() => setDrill(null)}/>
+              : typeConfig
+                ? <ServiceTypeConfigView slug={slug!} type={typeConfig} teams={allTeams}
+                    onBack={() => setTypeConfig(null)}
+                    onChanged={(t: ServiceType) => { setTypeConfig(t); reloadSharedData() }}
+                    onDeleted={() => { setTypeConfig(null); reloadSharedData() }}/>
+                : <ServiciosList slug={slug!} teams={allTeams}
+                    onOpenPlan={() => setDrill('plan')}
+                    onOpenTypeConfig={t => setTypeConfig(t)}
+                    onChanged={reloadSharedData}/>
+          )}
           {tab === 'canciones' && (drill === 'song' ? <CancionDetail onBack={() => setDrill(null)}/> : <Canciones onOpenSong={() => setDrill('song')}/>)}
           {tab === 'media' && <Media/>}
+          {tab === 'mensajes' && <Mensajes/>}
           {tab === 'personas' && (
             selectedPerson
               ? <PersonaDetail slug={slug!} person={selectedPerson} allTeams={allTeams}
